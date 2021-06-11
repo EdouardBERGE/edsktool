@@ -512,7 +512,7 @@ void main(int argc, char **argv) {
 	char *edsk_filename2=NULL;
 	char *output_edsk_filename=NULL;
 	struct s_edsk *edsk=NULL,*edsk2=NULL;
-	int i,j,rcpt,explore=0,merge=0,create=0,mapedsk=0,putdata=0,getdata=0,putfile=0,dumpdata=0;
+	int i,j,k,rcpt,explore=0,merge=0,create=0,mapedsk=0,putdata=0,getdata=0,putfile=0,dumpdata=0;
 	char *format=NULL;
 	char *infile=NULL,*outfile=NULL;
 	char *datain=NULL;
@@ -1106,9 +1106,22 @@ printf("repeat=%d\n",repetition);
 				if (edsk->track[curtrack].unformated) {
 					// nothing to do
 				} else {
-					for (i=0;i<edsk->track[curtrack].sectornumber;i++) {
+					int psect=0;
+					for (k=0;k<edsk->track[curtrack].sectornumber;k++) {
 						int zel=0;
 						int rcpt;
+
+						if (edsk->track[curtrack].sectornumber<3) {
+							i=k; // 0,1
+						} else {
+							// entrelacer les ecritures?
+							i=psect;
+							psect+=2;
+							if (psect>=edsk->track[curtrack].sectornumber) psect=1;
+						}
+
+						i=k;
+
 						switch (edsk->track[curtrack].sector[i].size) {
 							case 0:zel=128;break;
 							case 1:zel=256;break;
@@ -1122,14 +1135,15 @@ printf("repeat=%d\n",repetition);
 							exit(ABORT_ERROR);
 						}
 						// once we got the sector length, compute pack size
-						if (trackpacksize+4+zel>16384+4096-4) {
+						if (trackpacksize+5+zel>16384+4096-5) {
 							fprintf(exp,"defb #FF,#FF,#FF,#FF\n\n");
 							fprintf(exp,"save'PACK%d.DAT',0,$,AMSDOS\nbank\n",trackpacknumber++);
 							trackpacksize=0;
 						}
 						// add size to current track pack
-						trackpacksize+=4+zel;
-						fprintf(exp,"defb %d,%d,#%02X,%d\n",track,side,edsk->track[curtrack].sector[i].id,edsk->track[curtrack].sector[i].size);
+						trackpacksize+=5+zel;
+						fprintf(exp,"defb %d,%d,#%02X,%d,#%02X\n",track,side,edsk->track[curtrack].sector[i].id,edsk->track[curtrack].sector[i].size,
+								edsk->track[curtrack].sector[i].st2&0x40?0x49:0x45); // DAM
 
 						for (j=rcpt=0;j<zel;j++) {
 							if (rcpt==0) fprintf(exp,"defb #%02X",edsk->track[curtrack].sector[i].data[j]); else fprintf(exp,",#%02X",edsk->track[curtrack].sector[i].data[j]);
@@ -1140,6 +1154,7 @@ printf("repeat=%d\n",repetition);
 				}
 			}
 		}
+		fprintf(exp,"defb #EE,#EE,#EE,#EE\n\n");
 		fprintf(exp,"save'PACK%d.DAT',0,$,AMSDOS\n\n\n",trackpacknumber++);
 		fclose(exp);
 	}

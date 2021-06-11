@@ -13,7 +13,7 @@ compilation: edsktool is a short onefile source written in very old ANSI-C style
 
 ![screenshot](https://github.com/EdouardBERGE/edsktool/blob/main/github/red.png)    merging
 
-![screenshot](https://github.com/EdouardBERGE/edsktool/blob/main/github/green.png)  export (need improvements)
+![screenshot](https://github.com/EdouardBERGE/edsktool/blob/main/github/green.png)  export
 
 ![screenshot](https://github.com/EdouardBERGE/edsktool/blob/main/github/green.png)  dump
 

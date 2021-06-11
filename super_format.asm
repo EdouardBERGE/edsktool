@@ -3,7 +3,7 @@
 org #9000
 
 ; CALL Format,drive
-; CALL WriteSector,drive,side,piste,premsect,dernsect,taillesect,buffer
+; CALL WriteSector,command,drive,side,piste,premsect,dernsect,taillesect,buffer
 jp format_entry
 jp write_sector
 
@@ -31,7 +31,7 @@ ld bc,#FB7E ; FDC I/O port
 ;**************************************************
 ; reinit values for multiple run
 ;**************************************************
-xor a : ld (track),a : call calibrate
+xor a : ld (track),a : call calibrate : call calibrate ; twice for 80 tracks
 ld hl,TRACK_DEFINITION
 ld a,(hl) ; nbtrack
 inc a
@@ -52,7 +52,7 @@ push bc : ld hl,str_is_calibrated : call print_string : pop bc
 ;**************************************************
 ;**************************************************
 
-track_to_write ld a,#12 : dec a : ld (track_to_write+1),a : ret z
+track_to_write ld a,#12 : dec a : ld (track_to_write+1),a : jp z,ziend
 
 push bc,de,hl : ld hl,#0109 : call #BB75 : ld hl,str_check : call print_string : ld hl,#0509 : call #BB75 : pop hl,de,bc
 
@@ -144,6 +144,9 @@ push bc : ld bc,#7F10 : out (c),c : ld c,64+18 : out (c),c : pop bc ; VERT VIF
 ei
 jp super_format
 
+ziend
+xor a : ld (track),a : call calibrate : call calibrate ; twice for 80 tracks
+ret
 
 ;**************************************************
 ;**************************************************
@@ -205,6 +208,7 @@ msgerr5 defb 13,10,'there was error during format: ET3 is wrong',13,10,0
 
 str_ok defb 13,10,'everything went OK',13,10,0
 str_motor defb 'waiting before motor ON',13,10,0
+str_calibrating defb 'Calibration in progress',13,10,0
 str_is_calibrated defb 'Calibration OK',13,10,0
 str_motoron defb 'motor ON',13,10,0
 str_check defb 'CHK/       ',0
@@ -221,6 +225,8 @@ call GetResult
 ret
 
 calibrate
+push bc : ld hl,str_calibrating : call print_string : pop bc
+
 ld a,7 : call push_fdc
 ld a,(drive) : call push_fdc
 .waitseek
@@ -285,12 +291,12 @@ defb 'roudoudou'
 
 
 ;********** Amstrad 100% n°44 - routine adaptée pour gérer drive+face ******
-; CALL WriteSector,drive,side,piste,premsect,dernsect,taillesect,buffer
-write_sector: cp 7 : ret nz : di
+; CALL WriteSector,command,drive,side,piste,premsect,dernsect,taillesect,buffer
+write_sector: cp 8 : ret nz : di
 ld a,#0f : call l809c: ld a,(ix+12): call l809c: ld a,(ix+#08): call l809c: l8024: in a,(c): jp p,l8024
 ld hl,tampon: l802c: ld a,#08: call l809c: call l807d:
 ld hl,tampon: bit 5,(hl): jr z,l802c:ld h,(ix+#01): ld l,(ix+#00):
-ld a,(ix+10): rrca : and 128 : or #45: call l809c: ld a,(ix+12): call l809c: ld a,(ix+#08): call l809c: ld a,#00: call l809c
+ld a,(ix+10): rrca : and 128 : or (ix+14): call l809c: ld a,(ix+12): call l809c: ld a,(ix+#08): call l809c: ld a,#00: call l809c
 ld a,(ix+#06): call l809c: ld a,(ix+#02): call l809c: ld a,(ix+#04): call l809c: ld a,#2a: call l809c: ld a,#ff: call l809c
 jr write_data.ready
 write_data: inc c: ld a,(hl): out (c),a: dec c: inc hl: .ready: in a,(c): jp p,.ready: and #20: jr nz,write_data
