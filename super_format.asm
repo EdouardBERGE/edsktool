@@ -4,8 +4,10 @@ org #9000
 
 ; CALL Format,drive
 ; CALL WriteSector,command,drive,side,piste,premsect,dernsect,taillesect,buffer
+; CALL WriteHexa,command,drive,side,piste,premsect,dernsect,realsize,buffer
 jp format_entry
 jp write_sector
+jp write_hexa
 
 format_entry
 cp 1 : ret nz
@@ -299,12 +301,86 @@ ld hl,tampon: bit 5,(hl): jr z,l802c:ld h,(ix+#01): ld l,(ix+#00):
 ld a,(ix+10): rrca : and 128 : or (ix+14): call l809c: ld a,(ix+12): call l809c: ld a,(ix+#08): call l809c: ld a,#00: call l809c
 ld a,(ix+#06): call l809c: ld a,(ix+#02): call l809c: ld a,(ix+#04): call l809c: ld a,#2a: call l809c: ld a,#ff: call l809c
 jr write_data.ready
-write_data: inc c: ld a,(hl): out (c),a: dec c: inc hl: .ready: in a,(c): jp p,.ready: and #20: jr nz,write_data
+write_data: inc c: inc b : outi : dec c : .ready: in a,(c): jp p,.ready: and #20: jr nz,write_data
 ld hl,tampon: call l807d: ei: ret: tampon defs 10 : defb 'roudoudou'
 l807d: in a,(c): cp #c0: jr c,l807d: inc c: in a,(c): ld (hl),a: dec c: inc hl: ld a,#05
 l808b: dec a: jr nz,l808b: in a,(c): and #10: jr nz,l807d: ld a,(tampon+1): and #04: ret nz: scf: ret
 l809c: ld bc,#fb7e: push af: l80a0: in a,(c): add a: jr nc,l80a0: add a: jr nc,l80aa: pop af: ret
-l80aa: pop af: inc c: out (c),a: dec c: ld a,#05: l80b1: nop: dec a: jr nz,l80b1: ret
+l80aa: pop af: inc c: out (c),a: dec c: ret ;;;;;;; INUTILE ld a,#05: l80b1: nop: dec a: jr nz,l80b1: ret
+
+
+;********** Amstrad 100% n°44 - routine adaptée pour gérer drive+face et secteur taille 6 ******
+; CALL WriteHexagone,command,drive,side,piste,premsect,dernsect,realsize,buffer
+write_hexa: cp 8 : ret nz : di
+ld a,#0f : call .pushfdc: ld a,(ix+12): call .pushfdc: ld a,(ix+#08): call .pushfdc: .miniready: in a,(c): jp p,.miniready
+ld hl,tampon: .getint: ld a,#08: call .pushfdc: call .result:
+ld hl,tampon: bit 5,(hl): jr z,.getint:ld h,(ix+#01): ld l,(ix+#00):
+ld a,(ix+10): rrca : and 128 : or (ix+14): call .pushfdc: ld a,(ix+12): call .pushfdc: ld a,(ix+#08): call .pushfdc: ld a,#00: call .pushfdc
+ld a,(ix+6): call .pushfdc: ld a,6: call .pushfdc: ld a,(ix+4): call .pushfdc: ld a,#2a: call .pushfdc
+; before command start
+ld de,(ix+2) ; realsize
+dec de
+inc d
+inc e
+
+ld a,#ff: call .pushfdc
+jr .ready
+
+.write_data: inc c: inc b : outi : dec c
+
+dec e : jr nz,.ready
+dec d : jr z,.stop
+
+.ready: in a,(c): jp p,.ready: and #20: jr nz,.write_data
+
+.stop ld bc,#FA7E : out (c),0
+ei : xor a : ld b,a : halt : djnz $-1
+ld bc,#FA7E : inc a : out (c),a ; and start!
+halt : djnz $-1
+halt : djnz $-1
+ld bc,#FB7E
+
+ld hl,tampon: call .result
+
+;********** check ID *************
+ld a,#4A : call .pushfdc     ; GETID
+ld a,(ix+12) : call .pushfdc ; DRIVE
+.waitid in a,(c) : jp p,.waitid
+
+call GetResult
+; nbresult=7
+; result ==  192+32 == 32   ;ET0
+; result+1 & 4 == 0 ?
+; result+5 == ID
+; result+6 == 6
+; CPCEmuPower => 0 success 48 failed
+
+ld a,(nbresult) : cp 7 : jr nz,hexa_failed
+ld a,(result+0) : and 8 : jr nz,hexa_failed     ; wrong format
+ld a,(result+1) : and 1 : jr nz,hexa_failed     ; ID not found
+ld a,(result+5) : cp (ix+4) : jr nz,hexa_failed ; ID requested
+ld a,(result+6) : cp 6 : jr nz,hexa_failed      ; sector size
+
+ret
+
+
+.result: in a,(c): cp 192: jr c,.result: inc c: in a,(c): ld (hl),a: dec c: inc hl
+ld a,5 : .smallpause : dec a: jr nz,.smallpause ; cradooooooooo
+in a,(c): and 16: jr nz,.result: ld a,(tampon+1): and 4: ret nz: scf: ret
+
+.pushfdc: ld bc,#fb7e: push af
+.pushready : in a,(c): add a: jr nc,.pushready: add a: jr nc,.sendio: pop af: ret
+.sendio: pop af: inc c: out (c),a: dec c: ret
+
+hexa_failed
+ld hl,str_hexf : call print_string
+ei
+ret
+
+
+str_hexf defb 7,' Failed',7,' to write',7,' sector',7,13,10,0
+
+
 
 TRACK_DEFINITION
 include 'export_definition.asm'

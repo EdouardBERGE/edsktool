@@ -1042,8 +1042,7 @@ printf("repeat=%d\n",repetition);
 						idlist[edsk->track[curtrack].sector[i].id]=1;
 						if (edsk->track[curtrack].sector[i].size<minimalsize) minimalsize=edsk->track[curtrack].sector[i].size;
 						if (edsk->track[curtrack].sector[i].size>5) {
-							printf(KERROR"Cannot write this DSK (sector size 6)\n"KNORMAL);
-							exit(ABORT_ERROR);
+							minimalsize=5;
 						}
 					}
 					for (i=255;i>=0;i--) if (!idlist[i]) {garbageID=i;break;}
@@ -1129,21 +1128,24 @@ printf("repeat=%d\n",repetition);
 							case 3:zel=1024;break;
 							case 4:zel=2048;break;
 							case 5:zel=4096;break;
+							case 6:zel=edsk->track[curtrack].sector[i].length;break;
 						}
 						if (zel<edsk->track[curtrack].sector[i].length) {
 							printf(KERROR"Track %02d integrity error!\n"KNORMAL,track);
 							exit(ABORT_ERROR);
 						}
 						// once we got the sector length, compute pack size
-						if (trackpacksize+5+zel>16384+4096-5) {
+						if (trackpacksize+7+zel>16384+4096-5) {
 							fprintf(exp,"defb #FF,#FF,#FF,#FF\n\n");
 							fprintf(exp,"save'PACK%d.DAT',0,$,AMSDOS\nbank\n",trackpacknumber++);
 							trackpacksize=0;
 						}
 						// add size to current track pack
-						trackpacksize+=5+zel;
+						trackpacksize+=7+zel;
 						fprintf(exp,"defb %d,%d,#%02X,%d,#%02X\n",track,side,edsk->track[curtrack].sector[i].id,edsk->track[curtrack].sector[i].size,
 								edsk->track[curtrack].sector[i].st2&0x40?0x49:0x45); // DAM
+
+						fprintf(exp,"defw %d ; real size\n",zel);
 
 						for (j=rcpt=0;j<zel;j++) {
 							if (rcpt==0) fprintf(exp,"defb #%02X",edsk->track[curtrack].sector[i].data[j]); else fprintf(exp,",#%02X",edsk->track[curtrack].sector[i].data[j]);

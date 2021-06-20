@@ -15,6 +15,8 @@ compilation: edsktool is a short onefile source written in very old ANSI-C style
 
 ![screenshot](https://github.com/EdouardBERGE/edsktool/blob/main/github/green.png)  export
 
+![screenshot](https://github.com/EdouardBERGE/edsktool/blob/main/github/green.png)  size 6 sector support
+
 ![screenshot](https://github.com/EdouardBERGE/edsktool/blob/main/github/green.png)  dump
 
 ![screenshot](https://github.com/EdouardBERGE/edsktool/blob/main/github/green.png)  get sector data
