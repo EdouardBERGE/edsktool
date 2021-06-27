@@ -919,6 +919,15 @@ printf("repeat=%d\n",repetition);
 			}
 			if (edsk->track[curtrack].sectornumber==0 || (sector>=-1 && sector<edsk->track[curtrack].sectornumber)) {
 				edsk->track[curtrack].sector=realloc(edsk->track[curtrack].sector,(edsk->track[curtrack].sectornumber+1)*sizeof(struct s_edsk_sector));
+				// simplification for first sector of the track
+				if (!edsk->track[curtrack].sectornumber) sector=-1;
+
+				// enforce sector position
+				if (sector>=edsk->track[curtrack].sectornumber) {
+					printf(KERROR"Cannot insert sector after position %d while there is only %d sector(s)\n"KNORMAL,sector,edsk->track[curtrack].sectornumber);
+					exit(ABORT_ERROR);
+				}
+
 				// shift sectors
 				sector++;
 				
