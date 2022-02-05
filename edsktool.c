@@ -412,6 +412,7 @@ void Usage() {
 	printf("-explore                 explore EDSK (full informations)\n");
 	printf("-merge                   merge two EDSK\n");
 	printf("-export                  export DSK info for edskwrite tool\n");
+	printf("-forcegap                do not fix GAP when track is too long\n");
 	printf("-o <filename>            set output filename for EDSK\n");
 	printf("DATA options:\n");
 	printf("-dump    <[side:]track:sector>                      dump sector\n");
@@ -518,7 +519,7 @@ void main(int argc, char **argv) {
 	char *datain=NULL;
 	char *sep;
 	int infile_offset=0,infile_size;
-	int drop=0,add=0,droptrack=0,trackgap=0,trackfiller=0,repetition=0,export=0;
+	int drop=0,add=0,droptrack=0,trackgap=0,trackfiller=0,repetition=0,export=0,fixgap=1,refix=0;
 	int side=0,track=0,sector=0,sectorid,sectorsize,curtrack,gap3,filler,putfile_order;
 	FILE *f;
 
@@ -647,6 +648,8 @@ void main(int argc, char **argv) {
 				explore=1;
 			} else if (strcmp(argv[i],"-export")==0) {
 				export=1;
+			} else if (strcmp(argv[i],"-forcegap")==0) {
+				fixgap=0;
 			} else if (strcmp(argv[i],"-o")==0) {
 				if (i+1<argc) {
 					i++;
@@ -920,7 +923,12 @@ printf("repeat=%d\n",repetition);
 			if (edsk->track[curtrack].sectornumber==0 || (sector>=-1 && sector<edsk->track[curtrack].sectornumber)) {
 				edsk->track[curtrack].sector=realloc(edsk->track[curtrack].sector,(edsk->track[curtrack].sectornumber+1)*sizeof(struct s_edsk_sector));
 				// simplification for first sector of the track
-				if (!edsk->track[curtrack].sectornumber) sector=-1;
+				if (!edsk->track[curtrack].sectornumber) {
+					sector=-1;
+					if (repetition==1) {
+						printf(KIO"Adding sector on empty track\n");
+					}
+				}
 
 				// enforce sector position
 				if (sector>=edsk->track[curtrack].sectornumber) {
@@ -1076,6 +1084,44 @@ printf("repeat=%d\n",repetition);
 					}
 					// last sector does not need erased entries
 					requestedsector++;
+
+					// max length control
+					if (fixgap) {
+						int tracklen;
+						int sectorlen=0;
+						int wasfixed=0;
+						switch (minimalsize) {
+							case 0:sectorlen=128;break;
+							case 1:sectorlen=256;break;
+							case 2:sectorlen=512;break;
+							case 3:sectorlen=1024;break;
+							case 4:sectorlen=2048;break;
+							case 5:sectorlen=4096;break;
+							default:
+							case 6:sectorlen=0;break; // we will do what we can ^_^
+						}
+
+						while (1) {
+							tracklen=146+requestedsector*(edsk->track[curtrack].gap3+sectorlen+62);
+							if (tracklen>6250) {
+								edsk->track[curtrack].gap3--;
+								if (edsk->track[curtrack].gap3<16) {
+									break;
+								}
+								wasfixed=1;
+							} else break;
+						}
+						if (wasfixed) {
+							switch (refix) {
+								case 0:case 1:case 2:
+									printf(KWARNING"GAP Track was fixed for side %d / track %d\n"KNORMAL,side,track);break;
+								case 3:printf(KWARNING"[...]\n"KNORMAL);break;
+								default:break;
+							}
+							refix++;
+						}
+
+					}
 
 					fprintf(exp,"defb %d,%d,%d,%d,%d,%d ; track real definition\n",track,side,minimalsize,requestedsector,edsk->track[curtrack].gap3,edsk->track[curtrack].filler);
 					fprintf(exp,"defb ");
