@@ -1,8 +1,9 @@
 #include<stdlib.h>
 #include<string.h>
 #include<stdio.h>
-#include<unistd.h>
 
+#ifndef _MSC_VER
+#include<unistd.h>
 #define KNORMAL  "\x1B[0m"
 #define KERROR   "\x1B[31m"
 #define KAYGREEN "\x1B[32m"
@@ -10,7 +11,15 @@
 #define KBLUE    "\x1B[34m"
 #define KVERBOSE "\x1B[36m"
 #define KIO      "\x1B[97m"
-
+#else
+#define KNORMAL  ""
+#define KERROR   "Error:"
+#define KAYGREEN ""
+#define KWARNING "Warning:"
+#define KBLUE    ""
+#define KVERBOSE ""
+#define KIO      "IO:"
+#endif
 
 #define ABORT_ERROR -1
 
@@ -425,6 +434,7 @@ void Usage() {
 	printf("-add  <side:track:sector[+next]> <id> <size>        add sector at position\n");
 	printf("-trackgap    <side:track[+next]> <gap3>             set GAP for track\n");
 	printf("-trackfiller <side:track[+next]> <filler>           set filler byte for track format\n");
+	printf("-hexasize    <size>                                 set real size for hexagone sector operations\n");
 	exit(ABORT_ERROR);
 }
 void ExtendedHelp() {
@@ -518,7 +528,7 @@ void main(int argc, char **argv) {
 	char *infile=NULL,*outfile=NULL;
 	char *datain=NULL;
 	char *sep;
-	int infile_offset=0,infile_size;
+	int infile_offset=0,infile_size,hexasize=0x1800;
 	int drop=0,add=0,droptrack=0,trackgap=0,trackfiller=0,repetition=0,export=0,fixgap=1,refix=0;
 	int side=0,track=0,sector=0,sectorid,sectorsize,curtrack,gap3,filler,putfile_order;
 	FILE *f;
@@ -650,6 +660,14 @@ void main(int argc, char **argv) {
 				export=1;
 			} else if (strcmp(argv[i],"-forcegap")==0) {
 				fixgap=0;
+			} else if (strcmp(argv[i],"-hexasize")==0) {
+				if (i+1<argc) {
+					i++;
+					hexasize=atoi(argv[i]);
+				} else {
+					printf(KERROR"-o option needs a filename to run properly!\n"KNORMAL);
+					exit(ABORT_ERROR);
+				}
 			} else if (strcmp(argv[i],"-o")==0) {
 				if (i+1<argc) {
 					i++;
@@ -961,7 +979,7 @@ printf("repeat=%d\n",repetition);
 					case 3:edsk->track[curtrack].sector[sector].length=1024;break;
 					case 4:edsk->track[curtrack].sector[sector].length=2048;break;
 					case 5:edsk->track[curtrack].sector[sector].length=4096;break;
-					case 6:edsk->track[curtrack].sector[sector].length=0x1800;break;
+					case 6:edsk->track[curtrack].sector[sector].length=hexasize;break;
 				}
 				edsk->track[curtrack].sector[sector].data=malloc(edsk->track[curtrack].sector[sector].length);
 
@@ -1098,7 +1116,7 @@ printf("repeat=%d\n",repetition);
 							case 4:sectorlen=2048;break;
 							case 5:sectorlen=4096;break;
 							default:
-							case 6:sectorlen=0;break; // we will do what we can ^_^
+							case 6:sectorlen=0;break; // we will do what we can ^_^ aka No Size Control!
 						}
 
 						while (1) {
