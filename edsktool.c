@@ -422,6 +422,7 @@ void Usage() {
 	printf("-merge                   merge two EDSK\n");
 	printf("-export                  export DSK info for edskwrite tool\n");
 	printf("-forcegap                do not fix GAP when track is too long\n");
+	printf("-forcefiller             do not optimize Filler value\n");
 	printf("-o <filename>            set output filename for EDSK\n");
 	printf("DATA options:\n");
 	printf("-dump    <[side:]track:sector>                      dump sector\n");
@@ -652,6 +653,8 @@ void main(int argc, char **argv) {
 					printf(KERROR"-drop option needs a track and a sector index to run properly!\n"KNORMAL);
 					exit(ABORT_ERROR);
 				}
+			} else if (strcmp(argv[i],"-merge")==0) {
+				merge=1;
 			} else if (strcmp(argv[i],"-map")==0) {
 				mapedsk=1;
 			} else if (strcmp(argv[i],"-explore")==0) {
@@ -701,8 +704,6 @@ void main(int argc, char **argv) {
 			}
 		}
 	}
-
-printf("repeat=%d\n",repetition);
 
 	/*********************************************************************
 	 * option check
@@ -1280,6 +1281,34 @@ printf("repeat=%d\n",repetition);
 		}
 
 		fclose(exp);
+	}
+
+	if (merge) {
+		struct s_edsk_track tmptrack;
+		int maxtrack;
+
+		if (edsk->tracknumber>edsk2->tracknumber) maxtrack=edsk->tracknumber; else maxtrack=edsk2->tracknumber;
+
+		edsk->track=realloc(edsk->track,sizeof(struct s_edsk_track)*maxtrack*2);
+		edsk2->track=realloc(edsk2->track,sizeof(struct s_edsk_track)*maxtrack);
+
+		for (i=edsk->tracknumber;i<maxtrack;i++) {
+			memset(&edsk->track[i],0,sizeof(struct s_edsk_track));
+			edsk->track[i].unformated=1;
+		}
+		for (i=edsk2->tracknumber;i<maxtrack;i++) {
+			memset(&edsk2->track[i],0,sizeof(struct s_edsk_track));
+			edsk2->track[i].unformated=1;
+		}
+
+		edsk->sidenumber=2;
+		for (i=maxtrack-1;i>=0;i--) {
+			edsk->track[i*2]=edsk->track[i];
+			edsk->track[i*2+1]=edsk2->track[i];
+		}
+		edsk->tracknumber=maxtrack;
+		printf("EDSK merged\n");
+		must_write=1;
 	}
 
 	/*********************************************************************
