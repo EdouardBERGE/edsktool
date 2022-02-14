@@ -3,5 +3,9 @@
 
 compilation: edsktool is a short onefile source written in very old ANSI-C style, do you really need a makefile?
 
-# status: still a beta
+## new native writer
+- better support of unusual formats (can write SuperCycle floppy)
+- standard sectors are verified
+- new pack loader in pure assembly
+
 
