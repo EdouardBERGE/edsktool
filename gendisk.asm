@@ -51,7 +51,7 @@ ld (track_definition+1),hl
 call CheckET3
 ld a,(drive) : ld d,a : ld a,(track) : ld e,a : call SeekTrack
 
-ld hl,str_format : call PrintSTR : ld a,(track) : call dispA : call CRLF
+ld hl,str_format : call PrintSTR : ld a,(track) : call dispA : ld hl,str_side : call PrintSTR : ld a,(side) : call dispA : call CRLF
 
 call CheckET3
 call Format
@@ -86,10 +86,10 @@ ld (sectordatasize),de
 	pop hl
 ld a,(sectorsize) : cp 6 : jr z,.hexa
 call WriteSector
-jr WriteSectorList
+jp WriteSectorList
 .hexa
 call WriteHexaSector
-jr WriteSectorList
+jp WriteSectorList
 
 
 ; format data
@@ -145,13 +145,13 @@ ld a,(idsector)     : call sendFDCparam
 ld a,(gap)          : call sendFDCparam
 
 ; before command start
+ld de,.ready : push de
 ld de,(sectordatasize) ; realsize
 dec de
 inc d
 inc e
 
-ld a,#FF      : call sendFDCfast  ; useless
-jr .ready
+ld a,#FF      : jp sendFDCfast ; retour en .ready
 
 .write_data: inc c: inc b : outi : dec c
 dec e : jr nz,.ready
@@ -159,12 +159,16 @@ dec d : jr z,.stop
 .ready: in a,(c): jp p,.ready: and #20: jr nz,.write_data
 
 .stop ld b,#FA : out (c),0 ; #FA7E
+ld b,#FB
 
 .ready2 in a,(c) : jp p,.ready2 : and #20 : jr z,.termine
 inc c : out (c),0 : dec c : jr .ready2
 .termine
+ld (track_definition+1),hl
 ei
-call MotorOFF : call MotorON
+ld bc,#FA7E : ld a,1 : out (c),a
+ld hl,str_hexa_check : call PrintSTR
+halt : djnz $-1
 
 ld bc,#FB7E
 call GetResult
@@ -181,12 +185,12 @@ call GetResult
 ; result+6 == 6
 ; CPCEmuPower => 0 success 48 failed
 
-ld a,(nbresult) : cp 7 : jr nz,hexa_failed
-ld a,(result+0) : and 8 : jr nz,hexa_failed     ; wrong format
-ld a,(result+1) : and 1 : jr nz,hexa_failed     ; ID not found
-ld a,(result+5) : cp (idsector) : jr nz,hexa_failed ; ID requested
-ld a,(result+6) : cp 6 : jr nz,hexa_failed      ; sector size
-ld hl,str_hexa_success : jp PrintSTR
+ld a,(nbresult) : cp 7 : jr nz,.hexa_failed
+ld a,(result+0) : and 8 : jr nz,.hexa_failed     ; wrong format
+ld a,(result+1) : and 1 : jr nz,.hexa_failed     ; ID not found
+ld a,(result+5) : ld hl,idsector : cp (hl) : jr nz,.hexa_failed ; ID requested
+ld a,(result+6) : cp 6 : jr nz,.hexa_failed      ; sector size
+ld hl,str_verified : jp PrintSTR
 .hexa_failed
 ld hl,str_hexa_failed : jp PrintSTR
 
@@ -581,12 +585,15 @@ str_motor     defb 'Motor ON',13,10,0
 str_check     defb 'Drive check',13,10,0
 str_calibrate defb 'Drive calibration',13,10,0
 str_exitok    defb 'Floppy writed',13,10,0
-str_format    defb 'Format track ',0
+str_format    defb 'Format track: ',0
+str_side      defb ' side: ',0
 str_writesector defb 'Write ',0
 str_verified    defb ' Verified',13,10,0
 str_notverified    defb ' Wont be verified',13,10,0
 str_std defb 'STD ',0
 str_dam defb 'DAM ',0
+str_hexa_check   defb ' Check Hexa',0
+str_hexa_failed  defb ' Failed',13,10,0
 
 str_err_et3state          defb 'Error with ET3 state (retrying)',13,10,0
 str_err_et3_insertprotect defb 'Insert an unprotected floppy   ',13,10,0
