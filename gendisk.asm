@@ -11,8 +11,13 @@ cp 1 : ret nz : ld a,(ix+0) : ld (drive),a
 ld (ForceExit+1),sp
 ld a,10 : ld (maxfatal),a
 
+ld a,2 : call #BC0E ; mode 2
+
+ld hl,str_motor : call PrintStr
 call MotorON
+ld hl,str_amsdos: call PrintStr
 call AmsdosTiming
+ld hl,str_reset : call PrintStr
 call ResetPack
 
 ld hl,str_check : call PrintSTR
@@ -52,13 +57,16 @@ call CheckET3
 call Format
 
 ld a,(sectorsize) : cp 6 : jp z,track_definition ; unformated track, rien à écrire ensuite
-ld a,(nbsector) : ld (sectorcounter+1),a
 
 WriteSectorList
 call CheckET3
 ld hl,(track_definition+1)
 ld a,(hl) : inc hl : ld (track),a
 ld a,(hl) : inc hl : ld (side),a
+
+ld (track_definition+1),hl
+ld a,(side) : cp #FF : jp z,track_definition
+
 ld a,(hl) : inc hl : ld (idsector),a
 ld a,(hl) : inc hl : ld (sectorsize),a
 ld a,(hl) : inc hl : ld (writecommand),a
@@ -74,14 +82,14 @@ ld (sectordatasize),de
 
 	ld a,(idsector) : call dispHexa : ld a,':' : call #BB5A
 	ld a,(sectorsize) : call dispA : ld a,':' : call #BB5A
-	pop hl : call dispHL : call CRLF
+	pop hl : call dispHL
 	pop hl
+ld a,(sectorsize) : cp 6 : jr z,.hexa
 call WriteSector
-
-sectorcounter ld a,#12 : dec a : ld (sectorcounter+1),a : jr nz,WriteSectorList
-
-jp track_definition
-
+jr WriteSectorList
+.hexa
+call WriteHexaSector
+jr WriteSectorList
 
 
 ; format data
@@ -92,6 +100,7 @@ sectorsize defb 0
 nbsector   defb 0
 gap        defb 0
 filler     defb 0
+garbageId  defb 0
 
 writecommand defb 0
 idsector     defb 0
@@ -120,6 +129,69 @@ ret
 ;                             routines FDC
 ;*************************************************************************
 ;*************************************************************************
+
+WriteHexaSector
+di
+ld (.hlretry+1),hl ; backup in case of retry
+.hlretry ld hl,#1234
+ld bc,#FB7E
+ld a,(writecommand) : call sendFDCcommand
+ld a,(drive)        : call sendFDCparam
+ld a,(track)        : call sendFDCparam
+ld a,(side)         : call sendFDCparam
+ld a,(idsector)     : call sendFDCparam
+ld a,(sectorsize)   : call sendFDCparam
+ld a,(idsector)     : call sendFDCparam
+ld a,(gap)          : call sendFDCparam
+
+; before command start
+ld de,(sectordatasize) ; realsize
+dec de
+inc d
+inc e
+
+ld a,#FF      : call sendFDCfast  ; useless
+jr .ready
+
+.write_data: inc c: inc b : outi : dec c
+dec e : jr nz,.ready
+dec d : jr z,.stop
+.ready: in a,(c): jp p,.ready: and #20: jr nz,.write_data
+
+.stop ld b,#FA : out (c),0 ; #FA7E
+
+.ready2 in a,(c) : jp p,.ready2 : and #20 : jr z,.termine
+inc c : out (c),0 : dec c : jr .ready2
+.termine
+ei
+call MotorOFF : call MotorON
+
+ld bc,#FB7E
+call GetResult
+
+;********** check ID *************
+ld a,#4A : call sendFDCcommand     ; GETID
+ld a,(drive) : call sendFDCparam ; DRIVE
+.waitid in a,(c) : jp p,.waitid
+call GetResult
+; nbresult=7
+; result ==  192+32 == 32   ;ET0
+; result+1 & 4 == 0 ?
+; result+5 == ID
+; result+6 == 6
+; CPCEmuPower => 0 success 48 failed
+
+ld a,(nbresult) : cp 7 : jr nz,hexa_failed
+ld a,(result+0) : and 8 : jr nz,hexa_failed     ; wrong format
+ld a,(result+1) : and 1 : jr nz,hexa_failed     ; ID not found
+ld a,(result+5) : cp (idsector) : jr nz,hexa_failed ; ID requested
+ld a,(result+6) : cp 6 : jr nz,hexa_failed      ; sector size
+ld hl,str_hexa_success : jp PrintSTR
+.hexa_failed
+ld hl,str_hexa_failed : jp PrintSTR
+
+
+
 WriteSector
 di
 ld (.hlretry+1),hl ; backup in case of retry
@@ -135,7 +207,7 @@ ld a,(idsector)     : call sendFDCparam
 ld a,(gap)          : call sendFDCparam
 ld e,#20
 ld d,(hl)
-ld a,#FF            : call sendFDCfast  ; useless
+ld a,(sectordatasize)      : call sendFDCfast  ; useless
 .ready : in a,(c) : jp p,.ready : and e : jr z,.write_end
 inc c : out (c),d : inc hl : ld d,(hl) : dec c : jr .ready
 
@@ -153,7 +225,10 @@ ld a,(result+2) : and 1 : jp nz,.retry ; wrong format
 ld hl,(.hlretry+1) : ld de,(sectordatasize) : add hl,de : ld de,(track_definition+1)
 ld a,h : cp d : jp nz,.retry
 ld a,l : cp e : jp nz,.retry
-ret
+;ret
+
+ld a,(sectorsize) : or a : jp nz,CheckSector ; no check on zero size sector...
+ld hl,str_notverified : jp PrintSTR
 
 .retry
 ld hl,str_err_write : call PrintSTR
@@ -165,6 +240,65 @@ ld a,(result+5) : call dispHexa : ld a,' ' : call #BB5A
 ld a,(result+6) : call dispA : call CRLF
 ld a,(maxfatal) : dec a : ld (maxfatal),a : jp z,ForceExit
 jp .hlretry
+
+
+CheckSector
+di
+ld hl,#3000
+ld de,#3001
+ld bc,#0999
+ld (hl),0
+ldir
+;
+ld bc,#FB7E
+; read command according to write command
+ld a,(writecommand) 
+cp #45 : jr nz,.dam : ld a,#46
+.dam cp #49 : jr nz,.std : ld a,#4C
+.std call sendFDCcommand
+ld a,(drive)        : call sendFDCparam
+ld a,(track)        : call sendFDCparam
+ld a,(side)         : call sendFDCparam
+ld a,(idsector)     : call sendFDCparam
+ld a,(sectorsize)   : call sendFDCparam
+ld a,(idsector)     : call sendFDCparam
+ld a,(gap)          : call sendFDCparam
+ld e,#20
+ld hl,#3000
+ld a,(sectordatasize)   : call sendFDCfast  ; useless
+.ready : in a,(c) : jp p,.ready : and e : jr z,.write_end
+inc c : in a,(c) : ld (hl),a : inc hl : dec c : jr .ready
+
+.write_end
+call GetResult
+ei
+
+ld a,(nbresult) : cp 7 : jp nz,.retry
+ld a,(result+0) : and 64+128 : cp 64 : jp nz,.retry ; status special pour RW
+ld a,(result+0) : and 8+16 : jp nz,.retry
+ld a,(result+1) : and 1+2+4+16 : jp nz,.retry ; wrong format / cannot find ID / timeout
+ld a,(result+2) : and 1 : jp nz,.retry ; wrong format
+
+ld hl,(WriteSector.hlretry+1) : ld de,#3000 : ld bc,(sectordatasize)
+.compare
+ld a,(de) : cp (hl) : jr nz,.retry
+inc de : inc hl : dec bc : ld a,b : or c : jr nz,.compare
+
+ld hl,str_verified : call PrintSTR
+ret
+
+.retry
+ld hl,str_err_check : call PrintSTR
+ld a,(result) : call dispA : ld a,' ' : call #BB5A
+ld a,(result+1) : call dispA : ld a,' ' : call #BB5A
+ld a,(result+2) : call dispA : ld a,' ' : call #BB5A : ld a,'p' : call #BB5A
+ld a,(result+3) : call dispA : ld a,' ' : call #BB5A
+ld a,(result+5) : call dispHexa : ld a,' ' : call #BB5A
+ld a,(result+6) : call dispA : call CRLF
+ld a,(maxfatal) : dec a : ld (maxfatal),a : jp z,ForceExit
+jp CheckSector
+
+
 
 
 Format
@@ -187,6 +321,7 @@ ld a,(hl)    : call sendFDCfast : inc hl ; ID
 ld a,(hl)    : call sendFDCfast : inc hl ; sector size (used to read/write)
 dec d
 jr nz,.loopsector
+ld a,(hl) : ld (garbageId),a : inc hl
 ld (track_definition+1),hl
 call GetResult
 ei
@@ -212,13 +347,18 @@ inc hl
 ld a,h : or l : jr z,UnblockFDC
 in a,(c) : jp p,.ready
 bit 6,a     ; 0:FDC prêt à recevoir 1:FDC prêt à envoyer
-ret z       ; FDC dispo à écouter et en attente, on s'en va
+jr z,.et3   ; FDC dispo à écouter et en attente, on fait un ET3 pour terminer
 inc c
 in a,(c)    ; dépiler une donnée du port I/O
 dec c
 jr .ready
-
 .forceIO inc c : out (c),0 : dec c : ret ; demande de version de la puce
+.et3
+ld a,4 : call sendFDCparam ; command
+ld a,(drive)  : call sendFDCparam ; drive
+call GetResult
+ret
+
 
 sendFDCcommand
 push hl,bc,af
@@ -307,7 +447,6 @@ jr SeekTrack                            ; et on recommence
 ;*********************************
             MotorON
 ;*********************************
-ld hl,str_motor : call PrintStr
 
 ld a,(#BE5F) ; AMSDOS considère son moteur allumé?
 or a : jr z,.next
@@ -435,20 +574,25 @@ pop af : and 15 : cp 10 : jr c,.digit2 : add 'A'-'0'-10
 .digit2 add '0'
 jp #BB5A
 
-str_loadpack  defb 'Loading data pack',13,10,0
+str_loadpack  defb '- Loading data pack -',13,10,0
+str_amsdos    defb 'Configure FDC with regular Amsdos timing',13,10,0
+str_reset     defb 'Reinit engine',13,10,0
 str_motor     defb 'Motor ON',13,10,0
 str_check     defb 'Drive check',13,10,0
 str_calibrate defb 'Drive calibration',13,10,0
 str_exitok    defb 'Floppy writed',13,10,0
 str_format    defb 'Format track ',0
 str_writesector defb 'Write ',0
-str_std defb 'std ',0
-str_dam defb 'dam ',0
+str_verified    defb ' Verified',13,10,0
+str_notverified    defb ' Wont be verified',13,10,0
+str_std defb 'STD ',0
+str_dam defb 'DAM ',0
 
 str_err_et3state          defb 'Error with ET3 state (retrying)',13,10,0
 str_err_et3_insertprotect defb 'Insert an unprotected floppy   ',13,10,0
 str_err_format            defb 'Fatal error during format      ',13,10,0
-str_err_write             defb 'WriteError: ',0
+str_err_write             defb ' !Write Err: ',0
+str_err_check             defb ' !Check Err: ',0
 
 
 
