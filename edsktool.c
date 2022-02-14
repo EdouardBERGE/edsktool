@@ -529,7 +529,7 @@ void main(int argc, char **argv) {
 	char *datain=NULL;
 	char *sep;
 	int infile_offset=0,infile_size,hexasize=0x1800;
-	int drop=0,add=0,droptrack=0,trackgap=0,trackfiller=0,repetition=0,export=0,fixgap=1,refix=0;
+	int drop=0,add=0,droptrack=0,trackgap=0,trackfiller=0,repetition=0,export=0,fixgap=1,refix=0,fixfiller=1;
 	int side=0,track=0,sector=0,sectorid,sectorsize,curtrack,gap3,filler,putfile_order;
 	FILE *f;
 
@@ -658,6 +658,8 @@ void main(int argc, char **argv) {
 				explore=1;
 			} else if (strcmp(argv[i],"-export")==0) {
 				export=1;
+			} else if (strcmp(argv[i],"-forcefiller")==0) {
+				fixfiller=0;
 			} else if (strcmp(argv[i],"-forcegap")==0) {
 				fixgap=0;
 			} else if (strcmp(argv[i],"-hexasize")==0) {
@@ -1054,33 +1056,78 @@ printf("repeat=%d\n",repetition);
 		ExploreEDSK(edsk);
 	}
 	if (export) {
-		int trackpacksize;
-		int trackpacknumber;
+		int trackpacknumber=0;
 		FILE *exp;
+		int psect=0;
+		int trackcpt=0;
+		int sectorlen=0;
 
 		exp=fopen("export_definition.asm","wb");
 
 		fprintf(exp,";****************** EDSK EXPORT FORMAT DEFINITION **************\n");
-		fprintf(exp,"defb %d ; total track number\n",edsk->tracknumber*edsk->sidenumber);
 		for (track=0;track<edsk->tracknumber;track++) {
 			for (side=0;side<edsk->sidenumber;side++) {
 				curtrack=track*edsk->sidenumber+side;
 				fprintf(exp,";*** track %02d side %d***\n",track,side);
 				if (edsk->track[curtrack].unformated) {
-					fprintf(exp,"defb %d,%d,6,1,#50,#50,#66,6 ; unformated track\n",track,side);
+					fprintf(exp,"defb %d,%d,6,1,#50,#50,#66,6 : defb #FF,#FF ; unformated track (no garbage ID)\n",track,side);
 				} else {
-					int garbageID,idlist[256];
-					int minimalsize=6;
+					int garbageID,garbageID2,idlist[256];
+					int minimalsize;
 					int requestedsector=0,verifsector=0;
 					memset(idlist,0,sizeof(idlist));
+					// default size if the first size
+					minimalsize=edsk->track[curtrack].sector[0].size;
 					for (i=0;i<edsk->track[curtrack].sectornumber;i++) {
 						idlist[edsk->track[curtrack].sector[i].id]=1;
-						if (edsk->track[curtrack].sector[i].size<minimalsize) minimalsize=edsk->track[curtrack].sector[i].size;
+						if (edsk->track[curtrack].sector[i].size<minimalsize) {
+							if (i<-edsk->track[curtrack].sectornumber) // do bother about last sector size
+								minimalsize=edsk->track[curtrack].sector[i].size;
+						}
 						if (edsk->track[curtrack].sector[i].size>5) {
 							minimalsize=5;
 						}
 					}
 					for (i=255;i>=0;i--) if (!idlist[i]) {garbageID=i;break;}
+					for (i=garbageID-1;i>=0;i--) if (!idlist[i]) {garbageID2=i;break;}
+
+					// overload filler byte + warning
+					switch (minimalsize) {
+						case 0:sectorlen=80;break;
+						case 1:sectorlen=256;break;
+						case 2:sectorlen=512;break;
+						case 3:sectorlen=1024;break;
+						case 4:sectorlen=2048;break;
+						case 5:sectorlen=4096;break;
+						default:sectorlen=0;break;
+					}
+					if (sectorlen && fixfiller) {
+						int bestfiller;
+						memset(idlist,0,sizeof(idlist));
+						for (i=0;i<edsk->track[curtrack].sectornumber;i++) {
+							if (edsk->track[curtrack].sector[i].size==minimalsize) {
+								for (j=1;j<sectorlen;j++) {
+									if (edsk->track[curtrack].sector[i].data[0]!=edsk->track[curtrack].sector[i].data[j]) break;
+								}
+								// filler detected
+								if (j==sectorlen) {
+									idlist[edsk->track[curtrack].sector[i].data[0]]++;
+								}
+
+							}
+						}
+						bestfiller=edsk->track[curtrack].filler;
+						for (i=0;i<256;i++) {
+							if (idlist[i]>idlist[bestfiller]) {
+								bestfiller=i;
+							}
+						}
+						if (idlist[bestfiller] && bestfiller!=edsk->track[curtrack].filler) {
+							edsk->track[curtrack].filler=bestfiller;
+							printf(KWARNING"Filler Track was changed to #%02X for side %d / track %d\n"KNORMAL,bestfiller,side,track);
+						}
+					}
+
 					for (i=0;i<edsk->track[curtrack].sectornumber-1;i++) {
 						switch (edsk->track[curtrack].sector[i].size-minimalsize) {
 							case 0:
@@ -1106,10 +1153,9 @@ printf("repeat=%d\n",repetition);
 					// max length control
 					if (fixgap) {
 						int tracklen;
-						int sectorlen=0;
 						int wasfixed=0;
 						switch (minimalsize) {
-							case 0:sectorlen=128;break;
+							case 0:sectorlen=128;break; // ??? @@TOCHECK
 							case 1:sectorlen=256;break;
 							case 2:sectorlen=512;break;
 							case 3:sectorlen=1024;break;
@@ -1141,7 +1187,7 @@ printf("repeat=%d\n",repetition);
 
 					}
 
-					fprintf(exp,"defb %d,%d,%d,%d,%d,%d ; track real definition\n",track,side,minimalsize,requestedsector,edsk->track[curtrack].gap3,edsk->track[curtrack].filler);
+					fprintf(exp,"defb %d,%d,%d,%d,%d,#%02X ; track real definition\n",track,side,minimalsize,requestedsector,edsk->track[curtrack].gap3,edsk->track[curtrack].filler);
 					fprintf(exp,"defb ");
 					for (i=0;i<edsk->track[curtrack].sectornumber;i++) {
 						if (i) fprintf(exp,",");
@@ -1163,22 +1209,9 @@ printf("repeat=%d\n",repetition);
 						exit(ABORT_ERROR);
 					}
 					fprintf(exp," ; sector definition\n");
-				}
-			}
-		}
-		fprintf(exp,"save'WRITEDSK.BIN',#9000,$-#9000,AMSDOS\n\n\n");
+					fprintf(exp,"defb #%02X ; garbageID\n",garbageID2);
 
-		fprintf(exp,"\n\n\n;*** DATA definition\n\nbank\n");
-
-		trackpacksize=0;
-		trackpacknumber=0;
-		for (track=0;track<edsk->tracknumber;track++) {
-			for (side=0;side<edsk->sidenumber;side++) {
-				curtrack=track*edsk->sidenumber+side;
-				if (edsk->track[curtrack].unformated) {
-					// nothing to do
-				} else {
-					int psect=0;
+					// sector data
 					for (k=0;k<edsk->track[curtrack].sectornumber;k++) {
 						int zel=0;
 						int rcpt;
@@ -1193,9 +1226,8 @@ printf("repeat=%d\n",repetition);
 						}
 
 						i=k;
-
 						switch (edsk->track[curtrack].sector[i].size) {
-							case 0:zel=128;break;
+							case 0:zel=80;break;
 							case 1:zel=256;break;
 							case 2:zel=512;break;
 							case 3:zel=1024;break;
@@ -1203,34 +1235,50 @@ printf("repeat=%d\n",repetition);
 							case 5:zel=4096;break;
 							case 6:zel=edsk->track[curtrack].sector[i].length;break;
 						}
-						if (zel<edsk->track[curtrack].sector[i].length) {
+						if (zel!=80 && zel<edsk->track[curtrack].sector[i].length) {
 							printf(KERROR"Track %02d integrity error!\n"KNORMAL,track);
 							exit(ABORT_ERROR);
 						}
-						// once we got the sector length, compute pack size
-						if (trackpacksize+7+zel>16384+4096-5) {
-							fprintf(exp,"defb #FF,#FF,#FF,#FF\n\n");
-							fprintf(exp,"save'PACK%d.DAT',0,$,AMSDOS\nbank\n",trackpacknumber++);
-							trackpacksize=0;
-						}
-						// add size to current track pack
-						trackpacksize+=7+zel;
-						fprintf(exp,"defb %d,%d,#%02X,%d,#%02X\n",track,side,edsk->track[curtrack].sector[i].id,edsk->track[curtrack].sector[i].size,
-								edsk->track[curtrack].sector[i].st2&0x40?0x49:0x45); // DAM
 
-						fprintf(exp,"defw %d ; real size\n",zel);
 
-						for (j=rcpt=0;j<zel;j++) {
-							if (rcpt==0) fprintf(exp,"defb #%02X",edsk->track[curtrack].sector[i].data[j]); else fprintf(exp,",#%02X",edsk->track[curtrack].sector[i].data[j]);
-							if (rcpt==31) {fprintf(exp,"\n");rcpt=0;} else rcpt++;
+						
+						for (j=0;j<zel;j++) {
+							if (edsk->track[curtrack].sector[i].data[j]!=edsk->track[curtrack].filler) break;
 						}
-						if (rcpt!=0) fprintf(exp,"\n");
+						if (j!=zel) {
+							fprintf(exp,"defb %d,%d,#%02X,%d,#%02X\n",track,side,edsk->track[curtrack].sector[i].id,edsk->track[curtrack].sector[i].size,
+									edsk->track[curtrack].sector[i].st2&0x40?0x49:0x45); // DAM
+							fprintf(exp,"defw %d ; real size\n",zel);
+
+							for (j=rcpt=0;j<zel;j++) {
+								if (rcpt==0) fprintf(exp,"defb #%02X",edsk->track[curtrack].sector[i].data[j]); else fprintf(exp,",#%02X",edsk->track[curtrack].sector[i].data[j]);
+								if (rcpt==31) {fprintf(exp,"\n");rcpt=0;} else rcpt++;
+							}
+							if (rcpt!=0) fprintf(exp,"\n");
+						} else {
+							fprintf(exp,"; sector #%02X skipped as it is empty (format filler)\n",edsk->track[curtrack].sector[i].id);
+						}
 					}
+
+
+					fprintf(exp,"defb #FF,#FF ; end of sector data\n");
+				}
+				trackcpt++;
+				if (trackcpt>=2) {
+					trackcpt=0;
+					fprintf(exp,"defs 8,0 ; end of pack\n");
+					fprintf(exp,"save'PACK%04d.DAT',0,$,AMSDOS\n\n\n",trackpacknumber++);
+					fprintf(exp,"bank\n");
 				}
 			}
 		}
-		fprintf(exp,"defb #EE,#EE,#EE,#EE\n\n");
-		fprintf(exp,"save'PACK%d.DAT',0,$,AMSDOS\n\n\n",trackpacknumber++);
+
+		if (trackcpt) {
+			fprintf(exp,"defs 8,0 ; end of pack\n");
+			fprintf(exp,"save'PACK%04d.DAT',0,$,AMSDOS\n\n\n",trackpacknumber++);
+			fprintf(exp,"bank\n");
+		}
+
 		fclose(exp);
 	}
 
