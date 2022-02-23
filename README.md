@@ -7,10 +7,13 @@ this tool can map, explore, fix, modify, merge EDSK
 
 ## new native writer
 - better support of unusual formats (can write SuperCycle floppy)
+- almost all natives erased sectors formats supported
+- can write track with many sectors sharing the same ID
 - standard sectors are verified (10 retries then stop)
 - hexagon sectors are verified (no retry on this but not stop either)
 - new pack loader in pure assembly
 - 2 sides support
+- multiple drives support
 
 ## write EDSK on a real CPC (two side with 3.5" or one side with internal 3")
 
