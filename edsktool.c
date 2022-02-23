@@ -698,6 +698,7 @@ void main(int argc, char **argv) {
 				if (i+1<argc) {
 					i++;
 					output_edsk_filename=argv[i];
+					must_write=1;
 				} else {
 					printf(KERROR"-o option needs a filename to run properly!\n"KNORMAL);
 					exit(ABORT_ERROR);
