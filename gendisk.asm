@@ -26,6 +26,8 @@ call CheckET3
 ld hl,str_calibrate : call PrintSTR
 ld a,(drive)
 call CalibrateDrive
+call CheckET3
+call GetSpeed
 
 ;*********************************
             MainLoop
@@ -53,8 +55,8 @@ ld a,(drive) : ld d,a : ld a,(track) : ld e,a : call SeekTrack
 
 ld hl,str_format : call PrintSTR : ld a,(track) : call dispA : ld hl,str_side : call PrintSTR : ld a,(side) : call dispA : call CRLF
 
-call CheckET3
-call Format
+call CheckET3 : call Format
+call CheckET3 : call GetSpeed
 
 ld a,(sectorsize) : cp 6 : jp z,track_definition ; unformated track, rien à écrire ensuite
 
@@ -71,6 +73,8 @@ ld a,(hl) : inc hl : ld (idsector),a
 ld a,(hl) : inc hl : ld (sectorsize),a
 ld a,(hl) : inc hl : ld (writecommand),a
 
+ld e,(hl) : inc hl : ld d,(hl) : inc hl ; position delay
+ld (sectordelay),de
 ld e,(hl) : inc hl : ld d,(hl) : inc hl ; sector size
 ld (sectordatasize),de
 
@@ -105,12 +109,24 @@ garbageId  defb 0
 writecommand defb 0
 idsector     defb 0
 sectordatasize defw 0
+sectordelay defw 0
 
 ;**************
     ExitOK
 ;**************
 ld hl,str_exitok : .display call PrintSTR
    ExitError equ ExitOK.display
+
+ld a,(nbresult)
+or a : jr z,ForceExit
+ld hl,result
+.disp_result
+push af
+ld a,(hl) : call DispHexa :inc hl : ld a,' ' : call #BB5A
+pop af
+dec a
+jr nz,.disp_result
+
 ;**************
    ForceExit
 ;**************
@@ -201,6 +217,13 @@ di
 ld (.hlretry+1),hl ; backup in case of retry
 .hlretry ld hl,#1234
 ld bc,#FB7E
+
+ld a,10 : call sendFDCcommand ; getID single density mode
+ld a,(drive)        : call sendFDCparam
+call GetResult
+ld de,(sectordelay) : inc de
+.positioncontrol dec de : ld a,6 : dec a : jr nz,$-1 : ld a,e : or d : jr nz,.positioncontrol ; 9 + 3 + 5 x 4
+
 ld a,(writecommand) : call sendFDCcommand
 ld a,(drive)        : call sendFDCparam
 ld a,(track)        : call sendFDCparam
@@ -255,6 +278,13 @@ ld (hl),0
 ldir
 ;
 ld bc,#FB7E
+
+ld a,10 : call sendFDCcommand ; getID single density mode
+ld a,(drive)        : call sendFDCparam
+call GetResult
+ld de,(sectordelay) : inc de
+.positioncontrol dec de : ld a,6 : dec a : jr nz,$-1 : ld a,e : or d : jr nz,.positioncontrol ; 9 + 3 + 5 x 4
+
 ; read command according to write command
 ld a,(writecommand) 
 cp #45 : jr nz,.dam : ld a,#46
@@ -329,10 +359,13 @@ ld a,(hl) : ld (garbageId),a : inc hl
 ld (track_definition+1),hl
 call GetResult
 ei
-ld hl,str_err_format
+ld hl,str_err_format1
 ld a,(nbresult) : cp 7 : jp nz,ExitError
+ld hl,str_err_format2
 ld a,(result+0) : and 128+64+16+8 : jp nz,ExitError ; no disk, calib faile, head unavailable
+ld hl,str_err_format3
 ld a,(result+0) : and 32 : jp nz,ExitError ; terminated
+ld hl,str_err_format4
 ld a,(result+1) : and 16+2 : jp nz,ExitError ; overrun or protected => DO NOT CHECK END OF TRACK because we want to deformat some ;)
 ret
 
@@ -502,6 +535,42 @@ maxfatal defb 0
 
 
 ;*********************************
+            GetSpeed
+;*********************************
+push hl
+di
+ld bc,#FB7E
+ld a,10 : call sendFDCcommand    ; GetID
+ld a,(drive) : call sendFDCparam ; drive
+call GetResult ; 200 nops
+
+ld a,10 : call sendFDCcommand    ; GetID en séquence = 200 nops
+ld a,(drive) : call sendFDCparam ; drive
+
+; ENVIRON 400 nops écoulés au MINIMUM soit 12.5 octets quasi négligeable...
+ld hl,13
+.ready inc hl : nop 23 : in 0,(c) : jp p,.ready ; 9
+srl hl
+push hl : push hl
+call GetResult
+ei
+; 5 tours/seconde c'est 200.000 nops ou 6250 x 32 nops
+
+ld hl,str_tracklen   : call PrintSTR
+pop hl               : call DispHL
+ld hl,str_trackbytes : call PrintSTR
+
+pop de : ld hl,SpeedHisto : ld a,(track) : add a : add l : ld l,a : ld a,h : adc 0 : ld h,a : ld (hl),e : inc hl : ld (hl),d ; historise les vitesses de rotation
+ld hl,#90 : add hl,de
+ld a,h : cp #18 : jr z,.speedok
+         cp #19 : jr z,.speedok
+ld hl,str_err_speed : jp ExitError
+
+.speedok
+pop hl
+ret
+
+;*********************************
            ResetPack
 ;*********************************
 ld hl,pack_number
@@ -594,16 +663,22 @@ str_std defb 'STD ',0
 str_dam defb 'DAM ',0
 str_hexa_check   defb ' Check Hexa',0
 str_hexa_failed  defb ' Failed',13,10,0
+str_tracklen     defb 'Output track len: ',0
+str_trackbytes   defb ' bytes',13,10,0
 
 str_err_et3state          defb 'Error with ET3 state (retrying)',13,10,0
 str_err_et3_insertprotect defb 'Insert an unprotected floppy   ',13,10,0
-str_err_format            defb 'Fatal error during format      ',13,10,0
 str_err_write             defb ' !Write Err: ',0
 str_err_check             defb ' !Check Err: ',0
+str_err_format1           defb 'Fatal error during format (nbrez!=7)',13,10,0
+str_err_format2           defb 'Fatal error during format (nodisk,calib,head out of order)     ',13,10,0
+str_err_format3           defb 'Fatal error during format (not terminated)',13,10,0
+str_err_format4           defb 'Fatal error during format (overrun or protected)',13,10,0
+str_err_speed             defb 'Fatal error: tracklength must be between 6000 and 6500 bytes',13,10,0
 
-
-
+SpeedHisto defs 42*2
 
 save"gendisk.bin",#8000,$-#8000,AMSDOS
+save"gendisk.bin",#8000,$-#8000,DSK,"gentest.dsk"
 
 

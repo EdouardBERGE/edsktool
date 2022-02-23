@@ -108,7 +108,7 @@ struct s_edsk *NewEDSK(char *format) {
 
 void MAPTrack(struct s_edsk_track *track) {
 	int rlen,gaplen,i,curlen;
-	int s;
+	int s,weak,gap;
 
 	if (track->unformated) {
 		printf("S%dT%02d : Unformated\n",track->side,track->track);
@@ -149,13 +149,25 @@ void MAPTrack(struct s_edsk_track *track) {
 			if (rlen<0) rlen=0;
 			printf("%02X",track->sector[s].id);
 			if (rlen>3) {
-				printf(".s%d.",track->sector[s].size);
+				if (curlen==track->sector[s].length) {
+					printf(".s%d.",track->sector[s].size);
+				} else if (curlen*3<=track->sector[s].length) {
+					printf("."KWARNING"W"KNORMAL"%d.",track->sector[s].size);
+					weak=1;
+				} else {
+					printf("."KWARNING"G"KNORMAL"%d.",track->sector[s].size);
+					gap=1;
+				}
 				rlen-=4;
 			}
 			for (i=0;i<rlen;i++) printf(".");
 			//printf("%s#%02X (S%d/L%d/%02X/%02X)",s>0?" | ":"",track->sector[s].id,track->sector[s].size,track->sector[s].length,track->sector[s].st1,track->sector[s].st2);
 		}
+		if (weak && gap) printf(" gap+weak"); else
+		if (weak) printf(" weak"); else
+		if (gap) printf(" gap");
 		printf("\n");
+		weak=gap=0;
 	}
 	
 }
@@ -436,6 +448,7 @@ void Usage() {
 	printf("-trackgap    <side:track[+next]> <gap3>             set GAP for track\n");
 	printf("-trackfiller <side:track[+next]> <filler>           set filler byte for track format\n");
 	printf("-hexasize    <size>                                 set real size for hexagone sector operations\n");
+	printf("-tracklen    <size>                                 set real size for track operations & controls\n");
 	exit(ABORT_ERROR);
 }
 void ExtendedHelp() {
@@ -529,7 +542,7 @@ void main(int argc, char **argv) {
 	char *infile=NULL,*outfile=NULL;
 	char *datain=NULL;
 	char *sep;
-	int infile_offset=0,infile_size,hexasize=0x1800;
+	int infile_offset=0,infile_size,hexasize=0x1800,tracklen=6250;
 	int drop=0,add=0,droptrack=0,trackgap=0,trackfiller=0,repetition=0,export=0,fixgap=1,refix=0,fixfiller=1;
 	int side=0,track=0,sector=0,sectorid,sectorsize,curtrack,gap3,filler,putfile_order;
 	FILE *f;
@@ -670,7 +683,15 @@ void main(int argc, char **argv) {
 					i++;
 					hexasize=atoi(argv[i]);
 				} else {
-					printf(KERROR"-o option needs a filename to run properly!\n"KNORMAL);
+					printf(KERROR"-hexasize option needs a size to run properly!\n"KNORMAL);
+					exit(ABORT_ERROR);
+				}
+			} else if (strcmp(argv[i],"-tracklen")==0) {
+				if (i+1<argc) {
+					i++;
+					tracklen=atoi(argv[i]);
+				} else {
+					printf(KERROR"-tracklen option needs a size to run properly!\n"KNORMAL);
 					exit(ABORT_ERROR);
 				}
 			} else if (strcmp(argv[i],"-o")==0) {
@@ -1056,12 +1077,40 @@ void main(int argc, char **argv) {
 	if (explore) {
 		ExploreEDSK(edsk);
 	}
+	if (merge) {
+		struct s_edsk_track tmptrack;
+		int maxtrack;
+
+		if (edsk->tracknumber>edsk2->tracknumber) maxtrack=edsk->tracknumber; else maxtrack=edsk2->tracknumber;
+
+		edsk->track=realloc(edsk->track,sizeof(struct s_edsk_track)*maxtrack*2);
+		edsk2->track=realloc(edsk2->track,sizeof(struct s_edsk_track)*maxtrack);
+
+		for (i=edsk->tracknumber;i<maxtrack;i++) {
+			memset(&edsk->track[i],0,sizeof(struct s_edsk_track));
+			edsk->track[i].unformated=1;
+		}
+		for (i=edsk2->tracknumber;i<maxtrack;i++) {
+			memset(&edsk2->track[i],0,sizeof(struct s_edsk_track));
+			edsk2->track[i].unformated=1;
+		}
+
+		edsk->sidenumber=2;
+		for (i=maxtrack-1;i>=0;i--) {
+			edsk->track[i*2]=edsk->track[i];
+			edsk->track[i*2+1]=edsk2->track[i];
+		}
+		edsk->tracknumber=maxtrack;
+		printf("EDSK merged\n");
+		must_write=1;
+	}
 	if (export) {
 		int trackpacknumber=0;
+		int posdelay[32];
 		FILE *exp;
-		int psect=0;
 		int trackcpt=0;
 		int sectorlen=0;
+		int realidx;
 
 		exp=fopen("export_definition.asm","wb");
 
@@ -1077,6 +1126,7 @@ void main(int argc, char **argv) {
 					int minimalsize;
 					int requestedsector=0,verifsector=0;
 					memset(idlist,0,sizeof(idlist));
+					memset(posdelay,0,sizeof(posdelay));
 					// default size if the first size
 					minimalsize=edsk->track[curtrack].sector[0].size;
 					for (i=0;i<edsk->track[curtrack].sectornumber;i++) {
@@ -1153,7 +1203,7 @@ void main(int argc, char **argv) {
 
 					// max length control
 					if (fixgap) {
-						int tracklen;
+						int tmptracklen;
 						int wasfixed=0;
 						switch (minimalsize) {
 							case 0:sectorlen=128;break; // ??? @@TOCHECK
@@ -1167,8 +1217,8 @@ void main(int argc, char **argv) {
 						}
 
 						while (1) {
-							tracklen=146+requestedsector*(edsk->track[curtrack].gap3+sectorlen+62);
-							if (tracklen>6250) {
+							tmptracklen=146+requestedsector*(edsk->track[curtrack].gap3+sectorlen+62);
+							if (tmptracklen>tracklen) {
 								edsk->track[curtrack].gap3--;
 								if (edsk->track[curtrack].gap3<16) {
 									break;
@@ -1190,19 +1240,23 @@ void main(int argc, char **argv) {
 
 					fprintf(exp,"defb %d,%d,%d,%d,%d,#%02X ; track real definition\n",track,side,minimalsize,requestedsector,edsk->track[curtrack].gap3,edsk->track[curtrack].filler);
 					fprintf(exp,"defb ");
+					realidx=0;
 					for (i=0;i<edsk->track[curtrack].sectornumber;i++) {
 						if (i) fprintf(exp,",");
 						fprintf(exp,"#%02X,%d",edsk->track[curtrack].sector[i].id,edsk->track[curtrack].sector[i].size);
 						verifsector++;
+
+						posdelay[i]=realidx*(62+sectorlen+edsk->track[curtrack].gap3);
+						realidx++;
 				
 						if (i+1<edsk->track[curtrack].sectornumber) // not for the last sector	
 						switch (edsk->track[curtrack].sector[i].size-minimalsize) {
 							default:break;
-							case 1:	fprintf(exp,",/* erased */ %d,0",garbageID);verifsector++;break;
-							case 2:	fprintf(exp,",/* next 3 erased */ %d,0,%d,0,%d,0",garbageID,garbageID,garbageID);verifsector+=3;break;
-							case 3:	fprintf(exp,",/* next 7 erased */ %d,0,%d,0,%d,0,%d,0,%d,0,%d,0,%d,0",garbageID,garbageID,garbageID,garbageID,garbageID,garbageID,garbageID);verifsector+=7;break;
+							case 1:	fprintf(exp,",/* erased */ %d,0",garbageID);verifsector++;realidx++;break;
+							case 2:	fprintf(exp,",/* next 3 erased */ %d,0,%d,0,%d,0",garbageID,garbageID,garbageID);verifsector+=3;realidx+=3;break;
+							case 3:	fprintf(exp,",/* next 7 erased */ %d,0,%d,0,%d,0,%d,0,%d,0,%d,0,%d,0",garbageID,garbageID,garbageID,garbageID,garbageID,garbageID,garbageID);verifsector+=7;realidx+=7;break;
 							case 4:	fprintf(exp,",/* next 15 erased */ %d,0,%d,0,%d,0,%d,0,%d,0,%d,0,%d,0",garbageID,garbageID,garbageID,garbageID,garbageID,garbageID,garbageID);
-								fprintf(exp,",%d,0,%d,0,%d,0,%d,0,%d,0,%d,0,%d,0,%d,0",garbageID,garbageID,garbageID,garbageID,garbageID,garbageID,garbageID,garbageID);verifsector+=15;break;
+								fprintf(exp,",%d,0,%d,0,%d,0,%d,0,%d,0,%d,0,%d,0,%d,0",garbageID,garbageID,garbageID,garbageID,garbageID,garbageID,garbageID,garbageID);verifsector+=15;realidx+=15;break;
 						}
 					}
 					if (verifsector!=requestedsector) {
@@ -1216,15 +1270,6 @@ void main(int argc, char **argv) {
 					for (k=0;k<edsk->track[curtrack].sectornumber;k++) {
 						int zel=0;
 						int rcpt;
-
-						if (edsk->track[curtrack].sectornumber<3) {
-							i=k; // 0,1
-						} else {
-							// entrelacer les ecritures?
-							i=psect;
-							psect+=2;
-							if (psect>=edsk->track[curtrack].sectornumber) psect=1;
-						}
 
 						i=k;
 						switch (edsk->track[curtrack].sector[i].size) {
@@ -1249,6 +1294,7 @@ void main(int argc, char **argv) {
 						if (j!=zel) {
 							fprintf(exp,"defb %d,%d,#%02X,%d,#%02X\n",track,side,edsk->track[curtrack].sector[i].id,edsk->track[curtrack].sector[i].size,
 									edsk->track[curtrack].sector[i].st2&0x40?0x49:0x45); // DAM
+							fprintf(exp,"defw %d ; pos delay\n",posdelay[i]);
 							fprintf(exp,"defw %d ; real size\n",zel);
 
 							for (j=rcpt=0;j<zel;j++) {
@@ -1281,34 +1327,6 @@ void main(int argc, char **argv) {
 		}
 
 		fclose(exp);
-	}
-
-	if (merge) {
-		struct s_edsk_track tmptrack;
-		int maxtrack;
-
-		if (edsk->tracknumber>edsk2->tracknumber) maxtrack=edsk->tracknumber; else maxtrack=edsk2->tracknumber;
-
-		edsk->track=realloc(edsk->track,sizeof(struct s_edsk_track)*maxtrack*2);
-		edsk2->track=realloc(edsk2->track,sizeof(struct s_edsk_track)*maxtrack);
-
-		for (i=edsk->tracknumber;i<maxtrack;i++) {
-			memset(&edsk->track[i],0,sizeof(struct s_edsk_track));
-			edsk->track[i].unformated=1;
-		}
-		for (i=edsk2->tracknumber;i<maxtrack;i++) {
-			memset(&edsk2->track[i],0,sizeof(struct s_edsk_track));
-			edsk2->track[i].unformated=1;
-		}
-
-		edsk->sidenumber=2;
-		for (i=maxtrack-1;i>=0;i--) {
-			edsk->track[i*2]=edsk->track[i];
-			edsk->track[i*2+1]=edsk2->track[i];
-		}
-		edsk->tracknumber=maxtrack;
-		printf("EDSK merged\n");
-		must_write=1;
 	}
 
 	/*********************************************************************
