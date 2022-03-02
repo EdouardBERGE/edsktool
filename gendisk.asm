@@ -3,10 +3,10 @@ DISK_IN_CLOSE  equ #BC7A
 DISK_IN_DIRECT equ #BC83
 
 disk_buffer = #4000-2048
-
-org #8000
+implante=#8000
+org implante
 ; get param
-cp 1 : ret nz : ld a,(ix+0) : ld (drive),a
+cp 1 : ret nz : ld a,(ix+0) : ld (drive),a : xor a : ld (motor_state),a
 
 ld (ForceExit+1),sp
 ld a,10 : ld (maxfatal),a
@@ -25,8 +25,8 @@ call CheckET3
 
 ld hl,str_calibrate : call PrintSTR
 ld a,(drive)
-call CalibrateDrive
-call CheckET3
+;call CalibrateDrive
+;call CheckET3
 call GetSpeed
 
 ;*********************************
@@ -57,8 +57,8 @@ ld hl,str_format : call PrintSTR : ld a,(track) : call dispA : ld hl,str_side : 
 
 call CheckET3 : call Format
 call CheckET3 : call GetSpeed
-
 ld a,(sectorsize) : cp 6 : jp z,track_definition ; unformated track, rien à écrire ensuite
+
 
 WriteSectorList
 call CheckET3
@@ -452,10 +452,16 @@ result   defs 7
 CalibrateDrive
 push de
 ld d,a ; sauvegarde du lecteur dans D
+jr calinext
 caliretry
+;push af,bc,de,hl
+;ld a,(result) : call dispHexa : ld a,'.':call #BB5A
+;pop hl,de,bc,af
+calinext
 ld a,7:call sendFDCcommand ; calibration
 ld a,d:call sendFDCparam   ; lecteur
 calires
+ei : halt : halt
 ld a,8:call sendFDCcommand ; sense int state, pas d'autre paramètre!
 call GetResult
 ld a,(nbresult) : cp 2 : jr nz,calires ; 2 résultats ou rien
@@ -463,6 +469,9 @@ ld a,(result) : and #F8                ; on garde uniquement les bits d'état de
                                        ; sinon ça ne fonctionnera 
 cp 32 : jr nz,caliretry                ; si problème on recommence
 pop de
+push af,bc,de,hl
+ld hl,str_calib_ok : call printSTR
+pop hl,de,bc,af
 ret
 
 ; D=lecteur
@@ -484,12 +493,13 @@ jr SeekTrack                            ; et on recommence
 ;*********************************
             MotorON
 ;*********************************
-
 ld a,(#BE5F) ; AMSDOS considère son moteur allumé?
 or a : jr z,.next
 ld a,1 : ld (#BE69),a ; ticker au minimum et on attend
+halt
 jr MotorON
 .next
+ld bc,#FA7E : ld a,1 : out (c),a   ; on démarre dans tous les cas
 ld a,(motor_state) : or a : ret nz ; déjà allumé
 push bc
 ld bc,#FA7E : ld a,1 : out (c),a   ; on démarre
@@ -549,11 +559,10 @@ ld a,(drive) : call sendFDCparam ; drive
 
 ; ENVIRON 400 nops écoulés au MINIMUM soit 12.5 octets quasi négligeable...
 ld hl,13
-.ready inc hl : nop 23 : in 0,(c) : jp p,.ready ; 9
+.ready inc hl : nop 23 : in a,(c) : jp p,.ready ; 32
 srl hl
-push hl : push hl
+push hl : push hl : push hl
 call GetResult
-ei
 ; 5 tours/seconde c'est 200.000 nops ou 6250 x 32 nops
 
 ld hl,str_tracklen   : call PrintSTR
@@ -561,6 +570,8 @@ pop hl               : call DispHL
 ld hl,str_trackbytes : call PrintSTR
 
 pop de : ld hl,SpeedHisto : ld a,(track) : add a : add l : ld l,a : ld a,h : adc 0 : ld h,a : ld (hl),e : inc hl : ld (hl),d ; historise les vitesses de rotation
+
+pop hl
 ld hl,#90 : add hl,de
 ld a,h : cp #18 : jr z,.speedok
          cp #19 : jr z,.speedok
@@ -578,9 +589,16 @@ ld b,4
 .loop ld (hl),'0' : inc hl : djnz .loop
 ret
 
+
+str_rsx_sd   str 'SD'
+str_rsx_disc str 'DISC'
 ;*********************************
             LoadPack
 ;*********************************
+
+ld hl,str_rsx_sd : call #BCD4 : jr nc,.start
+xor a : call #001B
+.start
 ld hl,str_loadpack : call PrintStr
 ld hl,pack_filename
 ld b,pack_end-pack_filename
@@ -590,6 +608,10 @@ ret nc
 ld hl,#4000
 call DISK_IN_DIRECT
 call DISK_IN_CLOSE
+
+ld hl,str_rsx_disc : call #BCD4 : jr nc,.close
+xor a : call #001B
+.close
 ;*** increment counter in filename ***
 ld hl,pack_number+3
 .reloop ld a,(hl) : inc a : cp '9'+1 : jr nz,.incok
@@ -653,6 +675,7 @@ str_reset     defb 'Reinit engine',13,10,0
 str_motor     defb 'Motor ON',13,10,0
 str_check     defb 'Drive check',13,10,0
 str_calibrate defb 'Drive calibration',13,10,0
+str_calib_ok  defb 'Calibration OK',13,10,0
 str_exitok    defb 'Floppy writed',13,10,0
 str_format    defb 'Format track: ',0
 str_side      defb ' side: ',0
@@ -678,7 +701,9 @@ str_err_speed             defb 'Fatal error: tracklength must be between 6000 an
 
 SpeedHisto defs 42*2
 
-save"gendisk.bin",#8000,$-#8000,AMSDOS
-save"gendisk.bin",#8000,$-#8000,DSK,"gentest.dsk"
+print {hex}$
+
+save"gendisk.bin",implante,$-implante,AMSDOS
+
 
 
