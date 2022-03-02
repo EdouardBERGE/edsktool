@@ -9,6 +9,7 @@ this tool can map, explore, fix, modify, merge EDSK
 - better support of unusual formats (can write SuperCycle floppy)
 - almost all natives erased sectors formats supported
 - can write track with many sectors sharing the same ID
+- can mimic almost any kind of modified GAP
 - standard sectors are verified (10 retries then stop)
 - hexagon sectors are verified (no retry on this but not stop either)
 - new pack loader in pure assembly
