@@ -35,12 +35,14 @@ unsigned char st1;
 unsigned char st2;
 unsigned short int length;
 unsigned char *data;
+int fakegap;
 };
 
 struct s_edsk_track  {
 int track,side; // easy display
 int unformated;
 int sectornumber;
+int headersize;
 /* information purpose */
 int sectorsize;
 int gap3;
@@ -184,13 +186,13 @@ void ExploreTrack(struct s_edsk_track *track) {
 	int s;
 
 	if (track->unformated) {
-		printf("S%dT%02d : Unformated\n",track->side,track->track);
+		printf("S%dT%02d : Unformated [%04X]\n",track->side,track->track,track->headersize);
 	} else {
 		printf("S%dT%02d G%02XF%02XS%02d: ",track->side,track->track,track->gap3,track->filler,track->sectornumber);
 		for (s=0;s<track->sectornumber;s++) {
-			printf("%s#%02X (S%d/L%d/%02X/%02X)",s>0?" | ":"",track->sector[s].id,track->sector[s].size,track->sector[s].length,track->sector[s].st1,track->sector[s].st2);
+			printf("%s#%02X (S%d/L%d/%02X/%02X)",s>0?" ":"",track->sector[s].id,track->sector[s].size,track->sector[s].length,track->sector[s].st1,track->sector[s].st2);
 		}
-		printf("\n");
+		printf(" [%04X]\n",track->headersize);
 	}
 	
 }
@@ -215,7 +217,7 @@ struct s_edsk *EDSK_load(char *edskfilename)
 	int i,b,s,t,face,curtrack,sectornumber,sectorsize,sectorid,reallength,gap3,filler,ST1,ST2;
 	int currenttrackposition=0,currentsectorposition,tmpcurrentsectorposition;
 	int curblock=0,curoffset=0;
-	int special,is_data,is_vendor,spelocal;
+	int special,is_data,is_vendor,spelocal,ctrlsize;
 	FILE *f;
 	struct s_edsk *edsk;
 
@@ -237,7 +239,7 @@ struct s_edsk *EDSK_load(char *edskfilename)
 		sidenumber=header[34+14+1];
 
 		// not in EDSK tracksize=header[34+14+1+1]+header[34+14+1+1+1]*256;
-		//printf("tracks: %d  side:%d\n",tracknumber,sidenumber);
+		printf("tracks: %d  side:%d\n",tracknumber,sidenumber);
 
 		if (sidenumber<1 || sidenumber>2) {
 			printf(KERROR"[%s] EDSK format is not supported in update mode (ntrack=%d nside=%d)\n",edskfilename,tracknumber,sidenumber);
@@ -249,15 +251,18 @@ struct s_edsk *EDSK_load(char *edskfilename)
 		edsk->track=malloc(sizeof(struct s_edsk_track)*tracknumber*sidenumber);
 		memset(edsk->track,0,sizeof(struct s_edsk_track)*tracknumber*sidenumber);
 
-		for (i=disksize=0;i<tracknumber*sidenumber;i++) disksize+=header[0x34+i]*256;
+		for (i=disksize=0;i<tracknumber*sidenumber;i++) {
+			disksize+=header[0x34+i]*256;
+			edsk->track[i].headersize=header[0x34+i]*256;
+		}
 
-		//printf("total track size: %dkb\n",disksize/1024);
+		printf("total track size: %dkb\n",disksize/1024);
 
 		data=malloc(disksize);
 		memset(data,0,disksize);
-		if (fread((char *)data,1,disksize,f)!=disksize) {
-			printf(KERROR"Cannot read DSK tracks!\n");
-			exit(ABORT_ERROR);
+		if ((ctrlsize=fread((char *)data,1,disksize,f))!=disksize) {
+			printf(KERROR"Cannot read EDSK tracks! expecting %d bytes but read %d bytes\n"KNORMAL,disksize,ctrlsize);
+			// This is not a fatal Error anymore to allow further analysis
 		}
 
 		for (t=0;t<tracknumber;t++)
@@ -276,6 +281,9 @@ struct s_edsk *EDSK_load(char *edskfilename)
 				edsk->track[curtrack].unformated=1;
 			} else {
 				currenttrackposition+=header[0x34+curtrack]*256;
+				if (currenttrackposition>ctrlsize) {
+					printf(KERROR"Track %d side %d is declared as %04X bytes long but there is only %04X remaining\n"KNORMAL,t,face,header[0x34+curtrack]*256,ctrlsize-(currenttrackposition-header[0x34+curtrack]*256));
+				}
 
 				if (strncmp((char *)data+i,"Track-Info\r\n",12)) {
 					printf(KERROR"Invalid track information block side %d track %d => Header offset=%d\n",face,t,header[0x34+curtrack]*256);
@@ -322,7 +330,12 @@ struct s_edsk *EDSK_load(char *edskfilename)
 					edsk->track[curtrack].sector[s].length=reallength;
 					edsk->track[curtrack].sector[s].data=malloc(reallength);
 
-					memcpy(edsk->track[curtrack].sector[s].data,&data[currentsectorposition],reallength);
+					if (currentsectorposition+reallength>ctrlsize) {
+						printf(KERROR"Invalid side %d track %d => sector data of ID %02X outside EDSK!\n",face,t,sectorid);
+						exit(ABORT_ERROR);
+					} else {
+						memcpy(edsk->track[curtrack].sector[s].data,&data[currentsectorposition],reallength);
+					}
 					currentsectorposition+=reallength;
 				}
 			}
@@ -433,6 +446,9 @@ void Usage() {
 	printf("-explore                 explore EDSK (full informations)\n");
 	printf("-merge                   merge two EDSK\n");
 	printf("-export                  export DSK info for edskwrite tool\n");
+	printf("-usegap                  try to use GAP informations for export\n");
+	printf("-freegap                 remove GAP informations\n");
+	printf("-setextragap <size>      set maximum bytes of fake-GAP\n");
 	printf("-forcegap                do not fix GAP when track is too long\n");
 	printf("-forcefiller             do not optimize Filler value\n");
 	printf("-o <filename>            set output filename for EDSK\n");
@@ -537,17 +553,17 @@ void main(int argc, char **argv) {
 	char *edsk_filename2=NULL;
 	char *output_edsk_filename=NULL;
 	struct s_edsk *edsk=NULL,*edsk2=NULL;
-	int i,j,k,rcpt,explore=0,merge=0,create=0,mapedsk=0,putdata=0,getdata=0,putfile=0,dumpdata=0;
+	int i,j,k,rcpt,explore=0,merge=0,create=0,mapedsk=0,putdata=0,getdata=0,putfile=0,dumpdata=0,extragap=0,faketrigger=0;
 	char *format=NULL;
 	char *infile=NULL,*outfile=NULL;
 	char *datain=NULL;
 	char *sep;
-	int infile_offset=0,infile_size,hexasize=0x1800,tracklen=6250;
+	int infile_offset=0,infile_size,hexasize=0x1800,tracklen=6250,usegap=0,freegap=0;
 	int drop=0,add=0,droptrack=0,trackgap=0,trackfiller=0,repetition=0,export=0,fixgap=1,refix=0,fixfiller=1;
 	int side=0,track=0,sector=0,sectorid,sectorsize,curtrack,gap3,filler,putfile_order;
 	FILE *f;
 
-	printf("edsktool v0.1 / roudoudou from Resistance\n\n");
+	printf("edsktool build %s / roudoudou from Resistance\n\n",__DATE__);
 
 	/*********************************************************************
 	 * parameters parsing
@@ -678,6 +694,19 @@ void main(int argc, char **argv) {
 				fixfiller=0;
 			} else if (strcmp(argv[i],"-forcegap")==0) {
 				fixgap=0;
+			} else if (strcmp(argv[i],"-usegap")==0) {
+				usegap=1;
+			} else if (strcmp(argv[i],"-freegap")==0) {
+				freegap=1;
+			} else if (strcmp(argv[i],"-setextragap")==0) {
+				if (i+1<argc) {
+					i++;
+					extragap=atoi(argv[i]);
+					if (extragap<1) extragap=0;
+				} else {
+					printf(KERROR"-extragap option needs a size to run properly!\n"KNORMAL);
+					exit(ABORT_ERROR);
+				}
 			} else if (strcmp(argv[i],"-hexasize")==0) {
 				if (i+1<argc) {
 					i++;
@@ -800,6 +829,28 @@ void main(int argc, char **argv) {
 	/*********************************************************************
 	 * EDSK processing
 	*********************************************************************/
+	if (freegap) {
+		int sectorlen=0;
+		for (k=0;k<edsk->tracknumber;k++) {
+			for (j=0;j<edsk->sidenumber;j++) {
+				curtrack=k*edsk->sidenumber+j;
+				if (!edsk->track[curtrack].unformated) {
+					for (i=0;i<edsk->track[curtrack].sectornumber;i++) {
+						switch (edsk->track[curtrack].sector[i].size) {
+							case 0:sectorlen=80;break;
+							case 1:sectorlen=256;break;
+							case 2:sectorlen=512;break;
+							case 3:sectorlen=1024;break;
+							case 4:sectorlen=2048;break;
+							case 5:sectorlen=4096;break;
+							default:sectorlen=0;break;
+						}
+						if (edsk->track[curtrack].sector[i].length>sectorlen) edsk->track[curtrack].sector[i].length=sectorlen;
+					}
+				}
+			}
+		}
+	}
 	if (putfile+trackfiller+trackgap+droptrack+drop+add+getdata+putdata+dumpdata>1) {
 		printf(KERROR"Do not use multiple track/sector command at a time\n"KNORMAL);
 		exit(ABORT_ERROR);
@@ -1180,13 +1231,95 @@ void main(int argc, char **argv) {
 						}
 					}
 
+					// check for GAP extra
+					if (usegap) {
+						int gaplen,gapflag=0,maxgap=0;
+						int freeID=256;
+						int newgap=0;
+
+						for (i=0;i<edsk->track[curtrack].sectornumber;i++) {
+							switch (edsk->track[curtrack].sector[i].size) {
+								case 0:gaplen=80;break;
+								case 1:gaplen=256;break;
+								case 2:gaplen=512;break;
+								case 3:gaplen=1024;break;
+								case 4:gaplen=2048;break;
+								case 5:gaplen=4096;break;
+								default:gaplen=edsk->track[curtrack].sector[i].length;break;
+							}
+							if (gaplen<edsk->track[curtrack].sector[i].length) {
+								gaplen=edsk->track[curtrack].sector[i].length-gaplen;
+								if (gaplen>maxgap) maxgap=gaplen;
+								if (extragap && extragap<maxgap) maxgap=extragap;
+
+								if (!gapflag) {
+									printf(KWARNING"Extra GAP detected of %d byte(s) side %d track %d\n"KNORMAL,gaplen,side,track);
+									gapflag=1;
+								}
+								// do we need to change format?
+								if (edsk->track[curtrack].sector[i].size==minimalsize) {
+									minimalsize--;
+								}
+								// insert fake GAP sector
+								j=edsk->track[curtrack].sectornumber;
+								edsk->track[curtrack].sectornumber++;
+								edsk->track[curtrack].sector=realloc(edsk->track[curtrack].sector,sizeof(struct s_edsk_sector)*edsk->track[curtrack].sectornumber);
+								while (j>i) {
+									edsk->track[curtrack].sector[j]=edsk->track[curtrack].sector[j-1];
+									j--;
+								}
+
+								edsk->track[curtrack].sector[i+1].size--;
+								// find free ID
+								do {
+									freeID--;
+									for (j=0;j<edsk->track[curtrack].sectornumber;j++) {
+										if (edsk->track[curtrack].sector[j].id==freeID) break;
+									}
+								} while (j!=edsk->track[curtrack].sectornumber);
+								edsk->track[curtrack].sector[i+1].id=freeID;
+								switch (edsk->track[curtrack].sector[i+1].size) {
+									case 0:sectorlen=80;break;
+									case 1:sectorlen=256;break;
+									case 2:sectorlen=512;break;
+									case 3:sectorlen=1024;break;
+									case 4:sectorlen=2048;break;
+									case 5:sectorlen=4096;break;
+									default:break;
+								}
+								edsk->track[curtrack].sector[i+1].fakegap=1;
+								edsk->track[curtrack].sector[i+1].length=sectorlen;
+								edsk->track[curtrack].sector[i+1].data=malloc(edsk->track[curtrack].sector[i+1].length);
+								// last check
+								if (maxgap>sectorlen) maxgap=sectorlen;
+								// fill extra sector position
+								memcpy(edsk->track[curtrack].sector[i+1].data,edsk->track[curtrack].sector[i].data+edsk->track[curtrack].sector[i].length-sectorlen,sectorlen);
+
+								// compute new GAP
+								newgap=sectorlen-60-(sectorlen-maxgap)-2;
+
+								// A FINIR => check global sur les fakegap... => conserver le fakeoffset
+								edsk->track[curtrack].gap3=newgap;
+								i++;
+
+								faketrigger=1;
+							}
+						}
+
+						for (i=0;i<edsk->track[curtrack].sectornumber;i++) {
+							idlist[edsk->track[curtrack].sector[i].id]=1;
+						}
+						for (i=255;i>=0;i--) if (!idlist[i]) {garbageID=i;break;}
+						for (i=garbageID-1;i>=0;i--) if (!idlist[i]) {garbageID2=i;break;}
+					}
+
 					for (i=0;i<edsk->track[curtrack].sectornumber-1;i++) {
 						switch (edsk->track[curtrack].sector[i].size-minimalsize) {
 							case 0:
 								requestedsector++;
 								break;
 							case 1:
-								requestedsector+=2;
+								if (i+1<edsk->track[curtrack].sectornumber && edsk->track[curtrack].sector[i+1].fakegap) requestedsector+=1; else requestedsector+=2;
 								break;
 							case 2:
 								requestedsector+=4;
@@ -1220,6 +1353,10 @@ void main(int argc, char **argv) {
 						while (1) {
 							tmptracklen=146+requestedsector*(edsk->track[curtrack].gap3+sectorlen+62);
 							if (tmptracklen>tracklen) {
+								if (faketrigger) {
+									printf(KERROR"GAP cannot be fixed on fake gap track, track is too big! %d>%d\n"KNORMAL,tmptracklen,tracklen);
+									exit(ABORT_ERROR);
+								}
 								edsk->track[curtrack].gap3--;
 								if (edsk->track[curtrack].gap3<16) {
 									break;
@@ -1251,13 +1388,25 @@ void main(int argc, char **argv) {
 						realidx++;
 				
 						if (i+1<edsk->track[curtrack].sectornumber) // not for the last sector	
-						switch (edsk->track[curtrack].sector[i].size-minimalsize) {
-							default:break;
-							case 1:	fprintf(exp,",/* erased */ %d,0",garbageID);verifsector++;realidx++;break;
-							case 2:	fprintf(exp,",/* next 3 erased */ %d,0,%d,0,%d,0",garbageID,garbageID,garbageID);verifsector+=3;realidx+=3;break;
-							case 3:	fprintf(exp,",/* next 7 erased */ %d,0,%d,0,%d,0,%d,0,%d,0,%d,0,%d,0",garbageID,garbageID,garbageID,garbageID,garbageID,garbageID,garbageID);verifsector+=7;realidx+=7;break;
-							case 4:	fprintf(exp,",/* next 15 erased */ %d,0,%d,0,%d,0,%d,0,%d,0,%d,0,%d,0",garbageID,garbageID,garbageID,garbageID,garbageID,garbageID,garbageID);
-								fprintf(exp,",%d,0,%d,0,%d,0,%d,0,%d,0,%d,0,%d,0,%d,0",garbageID,garbageID,garbageID,garbageID,garbageID,garbageID,garbageID,garbageID);verifsector+=15;realidx+=15;break;
+
+							// a paufiner rapport à la différence minimalsize size > 1
+						if (i+1<edsk->track[curtrack].sectornumber && !edsk->track[curtrack].sector[i+1].fakegap) {
+							switch (edsk->track[curtrack].sector[i].size-minimalsize) {
+								default:break;
+								case 1:	fprintf(exp,",/* erased */ %d,0",garbageID);verifsector++;realidx++;break;
+								case 2:	fprintf(exp,",/* next 3 erased */ %d,0,%d,0,%d,0",garbageID,garbageID,garbageID);verifsector+=3;realidx+=3;break;
+								case 3:	fprintf(exp,",/* next 7 erased */ %d,0,%d,0,%d,0,%d,0,%d,0,%d,0,%d,0",garbageID,garbageID,garbageID,garbageID,garbageID,garbageID,garbageID);verifsector+=7;realidx+=7;break;
+								case 4:	fprintf(exp,",/* next 15 erased */ %d,0,%d,0,%d,0,%d,0,%d,0,%d,0,%d,0",garbageID,garbageID,garbageID,garbageID,garbageID,garbageID,garbageID);
+									fprintf(exp,",%d,0,%d,0,%d,0,%d,0,%d,0,%d,0,%d,0,%d,0",garbageID,garbageID,garbageID,garbageID,garbageID,garbageID,garbageID,garbageID);verifsector+=15;realidx+=15;break;
+							}
+						} else {
+							switch (edsk->track[curtrack].sector[i].size-minimalsize) {
+								default:
+									printf(KERROR"Track %02d integrity error! => UNSUPPORTED\n"KNORMAL,track);
+									exit(ABORT_ERROR);
+									break;
+								case 1:break;
+							}
 						}
 					}
 					if (verifsector!=requestedsector) {
@@ -1271,6 +1420,8 @@ void main(int argc, char **argv) {
 					for (k=0;k<edsk->track[curtrack].sectornumber;k++) {
 						int zel=0;
 						int rcpt;
+
+						if (!edsk->track[curtrack].sector[k].fakegap) continue;
 
 						i=k;
 						switch (edsk->track[curtrack].sector[i].size) {
@@ -1286,8 +1437,6 @@ void main(int argc, char **argv) {
 							printf(KERROR"Track %02d integrity error!\n"KNORMAL,track);
 							exit(ABORT_ERROR);
 						}
-
-
 						
 						for (j=0;j<zel;j++) {
 							if (edsk->track[curtrack].sector[i].data[j]!=edsk->track[curtrack].filler) break;
@@ -1307,6 +1456,50 @@ void main(int argc, char **argv) {
 							fprintf(exp,"; sector #%02X skipped as it is empty (format filler)\n",edsk->track[curtrack].sector[i].id);
 						}
 					}
+					for (k=0;k<edsk->track[curtrack].sectornumber;k++) {
+						int zel=0;
+						int rcpt;
+
+						if (edsk->track[curtrack].sector[k].fakegap) continue;
+
+						i=k;
+						switch (edsk->track[curtrack].sector[i].size) {
+							case 0:zel=80;break;
+							case 1:zel=256;break;
+							case 2:zel=512;break;
+							case 3:zel=1024;break;
+							case 4:zel=2048;break;
+							case 5:zel=4096;break;
+							case 6:zel=edsk->track[curtrack].sector[i].length;break;
+						}
+#if 0
+						if (zel!=80 && zel<edsk->track[curtrack].sector[i].length && !extragap) {
+							printf(KERROR"Track %02d integrity error! sector #%02X size=%d\n"KNORMAL,track,edsk->track[curtrack].sector[i].id,edsk->track[curtrack].sector[i].size);
+							exit(ABORT_ERROR);
+						}
+#endif
+						
+						for (j=0;j<zel;j++) {
+							if (edsk->track[curtrack].sector[i].data[j]!=edsk->track[curtrack].filler) break;
+						}
+						if (j!=zel || (i+1<edsk->track[curtrack].sectornumber && edsk->track[curtrack].sector[i+1].fakegap)) {
+							fprintf(exp,"defb %d,%d,#%02X,%d,#%02X\n",track,side,edsk->track[curtrack].sector[i].id,edsk->track[curtrack].sector[i].size,
+									edsk->track[curtrack].sector[i].st2&0x40?0x49:0x45); // DAM
+							fprintf(exp,"defw %d ; pos delay\n",posdelay[i]);
+							fprintf(exp,"defw %d ; real size\n",zel);
+
+							for (j=rcpt=0;j<zel;j++) {
+								if (rcpt==0) fprintf(exp,"defb #%02X",edsk->track[curtrack].sector[i].data[j]); else fprintf(exp,",#%02X",edsk->track[curtrack].sector[i].data[j]);
+								if (rcpt==31) {fprintf(exp,"\n");rcpt=0;} else rcpt++;
+							}
+							if (rcpt!=0) fprintf(exp,"\n");
+						} else {
+							fprintf(exp,"; sector #%02X skipped as it is empty (format filler)\n",edsk->track[curtrack].sector[i].id);
+						}
+					}
+
+
+
 
 
 					fprintf(exp,"defb #FF,#FF ; end of sector data\n");
