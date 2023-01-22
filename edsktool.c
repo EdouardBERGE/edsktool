@@ -445,6 +445,8 @@ void Usage() {
 	printf("-map                     kind of graphical map of EDSK\n");
 	printf("-explore                 explore EDSK (full informations)\n");
 	printf("-merge                   merge two EDSK\n");
+	printf("-from1                   side to use from 1st floppy when merging\n");
+	printf("-from2                   side to use from 2nd floppy when merging\n");
 	printf("-export                  export DSK info for edskwrite tool\n");
 	printf("-usegap                  try to use GAP informations for export\n");
 	printf("-freegap                 remove GAP informations\n");
@@ -558,7 +560,7 @@ void main(int argc, char **argv) {
 	char *infile=NULL,*outfile=NULL;
 	char *datain=NULL;
 	char *sep;
-	int infile_offset=0,infile_size,hexasize=0x1800,tracklen=6250,usegap=0,freegap=0;
+	int infile_offset=0,infile_size,hexasize=0x1800,tracklen=6250,usegap=0,freegap=0,side1=0,side2=0;
 	int drop=0,add=0,droptrack=0,trackgap=0,trackfiller=0,repetition=0,export=0,fixgap=1,refix=0,fixfiller=1;
 	int side=0,track=0,sector=0,sectorid,sectorsize,curtrack,gap3,filler,putfile_order;
 	FILE *f;
@@ -682,8 +684,6 @@ void main(int argc, char **argv) {
 					printf(KERROR"-drop option needs a track and a sector index to run properly!\n"KNORMAL);
 					exit(ABORT_ERROR);
 				}
-			} else if (strcmp(argv[i],"-merge")==0) {
-				merge=1;
 			} else if (strcmp(argv[i],"-map")==0) {
 				mapedsk=1;
 			} else if (strcmp(argv[i],"-explore")==0) {
@@ -698,6 +698,34 @@ void main(int argc, char **argv) {
 				usegap=1;
 			} else if (strcmp(argv[i],"-freegap")==0) {
 				freegap=1;
+			} else if (strcmp(argv[i],"-from1")==0) {
+				if (i+1<argc) {
+					i++;
+					side1=atoi(argv[i]);
+					if (side1!=0 && side1!=1) {
+						printf(KERROR"-from option needs a side (0 or 1) to run properly!\n"KNORMAL);
+						exit(ABORT_ERROR);
+					}
+				} else {
+					printf(KERROR"-from option needs a side (0 or 1) to run properly!\n"KNORMAL);
+					exit(ABORT_ERROR);
+				}
+			} else if (strcmp(argv[i],"-from2")==0) {
+				if (i+1<argc) {
+					i++;
+					side2=atoi(argv[i]);
+					if (side2!=0 && side2!=1) {
+						printf(KERROR"-from option needs a side (0 or 1) to run properly!\n"KNORMAL);
+						exit(ABORT_ERROR);
+					}
+				} else {
+					printf(KERROR"-from option needs a side (0 or 1) to run properly!\n"KNORMAL);
+					exit(ABORT_ERROR);
+				}
+			} else if (strcmp(argv[i],"-merge")==0) {
+				must_read=1;
+				must_write=1;
+				merge=1;
 			} else if (strcmp(argv[i],"-setextragap")==0) {
 				if (i+1<argc) {
 					i++;
@@ -750,7 +778,7 @@ void main(int argc, char **argv) {
 			} else if (!edsk_filename2) {
 				edsk_filename2=argv[i];
 			} else {
-				printf(KERROR"EDSK filename already set!\n"KNORMAL);
+				printf(KERROR"EDSK filenames already set!\n"KNORMAL);
 				exit(ABORT_ERROR);
 			}
 		}
@@ -794,7 +822,7 @@ void main(int argc, char **argv) {
 			exit(ABORT_ERROR);
 		}
 		// twin EDSK for fusion
-		if (edsk_filename2) {
+		if (merge && edsk_filename2) {
 			edsk2=EDSK_load(edsk_filename2);
 		}
 	}
@@ -1130,31 +1158,40 @@ void main(int argc, char **argv) {
 		ExploreEDSK(edsk);
 	}
 	if (merge) {
-		struct s_edsk_track tmptrack;
+		struct s_edsk_track *newtracks;
 		int maxtrack;
 
+		if (side1 && edsk->sidenumber<2) {
+			printf(KERROR"first EDSK does not have 2 sides...\n"KNORMAL);
+			exit(ABORT_ERROR);
+		}
+		if (side2 && edsk2->sidenumber<2) {
+			printf(KERROR"second EDSK does not have 2 sides...\n"KNORMAL);
+			exit(ABORT_ERROR);
+		}
+
+		// merged DSK will get the maximum track number
 		if (edsk->tracknumber>edsk2->tracknumber) maxtrack=edsk->tracknumber; else maxtrack=edsk2->tracknumber;
 
-		edsk->track=realloc(edsk->track,sizeof(struct s_edsk_track)*maxtrack*2);
-		edsk2->track=realloc(edsk2->track,sizeof(struct s_edsk_track)*maxtrack);
+		newtracks=malloc(sizeof(struct s_edsk_track)*maxtrack*2);
+		memset(newtracks,0,sizeof(struct s_edsk_track)*maxtrack*2);
 
+		// copie des faces
+		for (i=0;i<edsk->tracknumber;i++) newtracks[i*2]=edsk->track[i*edsk->sidenumber+side1];
+		for (i=0;i<edsk2->tracknumber;i++) newtracks[i*2+1]=edsk2->track[i*edsk2->sidenumber+side2];
+
+		// new tracks are unformated
 		for (i=edsk->tracknumber;i<maxtrack;i++) {
-			memset(&edsk->track[i],0,sizeof(struct s_edsk_track));
-			edsk->track[i].unformated=1;
+			newtracks[i*2].unformated=1;
 		}
 		for (i=edsk2->tracknumber;i<maxtrack;i++) {
-			memset(&edsk2->track[i],0,sizeof(struct s_edsk_track));
-			edsk2->track[i].unformated=1;
+			newtracks[i*2+1].unformated=1;
 		}
 
-		edsk->sidenumber=2;
-		for (i=maxtrack-1;i>=0;i--) {
-			edsk->track[i*2]=edsk->track[i];
-			edsk->track[i*2+1]=edsk2->track[i];
-		}
+		edsk->track=newtracks; // porky, memory leak powah :)
 		edsk->tracknumber=maxtrack;
+		edsk->sidenumber=2;
 		printf("EDSK merged\n");
-		must_write=1;
 	}
 	if (export) {
 		int trackpacknumber=0;
