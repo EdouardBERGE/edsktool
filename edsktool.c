@@ -340,8 +340,87 @@ struct s_edsk *EDSK_load(char *edskfilename)
 				}
 			}
 		}
+        } else if (strncmp(header,"MV - CPC",8)==0) {
+                printf("opening legacy DSK [%s] / creator: %-14.14s\n",edskfilename,header+34);
+
+                tracknumber=header[34+14];
+                sidenumber=header[34+14+1];
+                edsk->tracknumber=tracknumber;
+                edsk->sidenumber=sidenumber;
+                tracksize=header[34+14+1+1]+header[34+14+1+1+1]*256;
+
+                printf("tracks: %d sides: %d ",edsk->tracknumber,edsk->sidenumber);
+                printf("track size: %dkb disk size: %dkb\n",tracksize/1024,tracksize*edsk->tracknumber*edsk->sidenumber/1024);
+
+                data=malloc(tracksize*edsk->tracknumber*edsk->sidenumber);
+                if (fread(data,1,tracksize*edsk->tracknumber*edsk->sidenumber,f)!=tracksize*edsk->tracknumber*edsk->sidenumber) {
+                        printf("Cannot read DSK tracks!");
+                        return NULL;
+                }
+
+                edsk->track=malloc(sizeof(struct s_edsk_track)*tracknumber*sidenumber);
+                memset(edsk->track,0,sizeof(struct s_edsk_track)*tracknumber*sidenumber);
+
+                for (t=0;t<edsk->tracknumber;t++) {
+                        for (face=0;face<edsk->sidenumber;face++) {
+                                int maxsectorsize;
+                                curtrack=t*edsk->sidenumber+face;
+
+                                i=(t*edsk->sidenumber+face)*tracksize;
+                                if (strncmp(data+i,"Track-Info\r\n",12)) {
+                                        printf("Invalid track information block side %d track %d",face,t);
+                                        return NULL;
+                                }
+                                edsk->track[curtrack].sectornumber=sectornumber=data[i+21];
+                                edsk->track[curtrack].sectorsize=data[i+20];
+                                edsk->track[curtrack].gap3=data[i+22];
+                                edsk->track[curtrack].filler=data[i+23];
+                                edsk->track[curtrack].datarate=0;
+                                edsk->track[curtrack].recordingmode=0;
+                                reallength=0;
+                                for (s=0;s<edsk->track[curtrack].sectornumber;s++) {
+                                        switch (data[i+24+8*s+3]) {
+                                                default:
+                                                case 0:if (reallength<128) reallength=128;break;
+                                                case 1:if (reallength<256) reallength=256;break;
+                                                case 2:if (reallength<512) reallength=512;break;
+                                                case 3:if (reallength<1024) reallength=1024;break;
+                                                case 4:if (reallength<2048) reallength=2048;break;
+                                                case 5:if (reallength<4096) reallength=4096;break;
+                                                case 6:if (reallength<0x1800) reallength=0x1800;break;
+                                        }
+                                }
+                                maxsectorsize=reallength;
+                               edsk->track[curtrack].sector=malloc(sizeof(struct s_edsk_sector)*edsk->track[curtrack].sectornumber);
+                                memset(edsk->track[curtrack].sector,0,sizeof(struct s_edsk_sector)*sectornumber);
+                                for (s=0;s<edsk->track[curtrack].sectornumber;s++) {
+                                        edsk->track[curtrack].sector[s].track=data[i+24+8*s];
+                                        edsk->track[curtrack].sector[s].side=data[i+24+8*s+1];
+                                        edsk->track[curtrack].sector[s].id=data[i+24+8*s+2];
+                                        edsk->track[curtrack].sector[s].size=data[i+24+8*s+3];
+                                        edsk->track[curtrack].sector[s].st1=data[i+24+8*s+4];
+                                        edsk->track[curtrack].sector[s].st2=data[i+24+8*s+5];
+
+                                        switch (edsk->track[curtrack].sector[s].size) {
+                                                default:
+                                                case 0:reallength=128;break;
+                                                case 1:reallength=256;break;
+                                                case 2:reallength=512;break;
+                                                case 3:reallength=1024;break;
+                                                case 4:reallength=2048;break;
+                                                case 5:reallength=4096;break;
+                                                case 6:reallength=0x1800;break;
+                                        }
+                                        edsk->track[curtrack].sector[s].length=reallength;
+                                        edsk->track[curtrack].sector[s].data=malloc(reallength);
+
+                                        memcpy(edsk->track[curtrack].sector[s].data,&data[i+0x100+s*maxsectorsize],reallength);
+                                }
+                        }
+                }
+
 	} else {
-		printf(KERROR"file [%s] is not a valid EDSK floppy image (No DSK support)\n",edskfilename);
+		printf(KERROR"file [%s] is not a valid EDSK floppy image\n",edskfilename);
 		exit(ABORT_ERROR);
 	}
 	fclose(f);
@@ -444,6 +523,7 @@ void Usage() {
 	printf("-create DATA|VENDOR      create new edsk in data or vendor format\n");
 	printf("-map                     kind of graphical map of EDSK\n");
 	printf("-explore                 explore EDSK (full informations)\n");
+	printf("-clean                   clean sector extra-bytes\n");
 	printf("-merge                   merge two EDSK\n");
 	printf("-from1                   side to use from 1st floppy when merging\n");
 	printf("-from2                   side to use from 2nd floppy when merging\n");
@@ -459,6 +539,7 @@ void Usage() {
 	printf("-get     <[side:]track:sector> <file>               get sector data\n");
 	printf("-put     <[side:]track:sector> <file> [<offset>]    put sector data\n");
 	printf("-putfile <[side:]track:sector> <file> <PHYSICAL|ID> put file following physical/logical order\n");
+	printf("-rename  <[side:]track:sector> <newid>              rename\n");
 	printf("FORMAT MODIFICATION options:\n");
 	printf("-droptrack <side:track[+next]>                      drop track(s)\n");
 	printf("-drop <side:track:sector[+next]>                    drop sector at specified position\n");
@@ -467,6 +548,8 @@ void Usage() {
 	printf("-trackfiller <side:track[+next]> <filler>           set filler byte for track format\n");
 	printf("-hexasize    <size>                                 set real size for hexagone sector operations\n");
 	printf("-tracklen    <size>                                 set real size for track operations & controls\n");
+	printf("\n");
+	printf("for sectorID value, you can use $ or 0x for an hexadecimal value\n");
 	exit(ABORT_ERROR);
 }
 void ExtendedHelp() {
@@ -482,8 +565,6 @@ void GetValue(char *param, int *zeval) {
 
 	switch (param[0]) {
 		case '$':
-		case '&':
-		case '#':
 			*zeval=strtol(param+1,&ptr,16);
 			break;
 		case '0':
@@ -555,12 +636,12 @@ void main(int argc, char **argv) {
 	char *edsk_filename2=NULL;
 	char *output_edsk_filename=NULL;
 	struct s_edsk *edsk=NULL,*edsk2=NULL;
-	int i,j,k,rcpt,explore=0,merge=0,create=0,mapedsk=0,putdata=0,getdata=0,putfile=0,dumpdata=0,extragap=0,faketrigger=0;
+	int i,j,k,rcpt,explore=0,merge=0,create=0,mapedsk=0,putdata=0,getdata=0,putfile=0,dumpdata=0,extragap=0,faketrigger=0,cleanextra=0,rename=0;
 	char *format=NULL;
 	char *infile=NULL,*outfile=NULL;
 	char *datain=NULL;
 	char *sep;
-	int infile_offset=0,infile_size,hexasize=0x1800,tracklen=6250,usegap=0,freegap=0,side1=0,side2=0;
+	int infile_offset=0,infile_size,hexasize=0x1800,tracklen=6250,usegap=0,freegap=0,side1=0,side2=0,newid=-1;
 	int drop=0,add=0,droptrack=0,trackgap=0,trackfiller=0,repetition=0,export=0,fixgap=1,refix=0,fixfiller=1;
 	int side=0,track=0,sector=0,sectorid,sectorsize,curtrack,gap3,filler,putfile_order;
 	FILE *f;
@@ -610,6 +691,15 @@ void main(int argc, char **argv) {
 					}
 				} else {
 					printf(KERROR"-put option needs a position and a filename (+optionnal offset) to run properly!\n"KNORMAL);
+					exit(ABORT_ERROR);
+				}
+			} else if (strcmp(argv[i],"-rename")==0) {
+				if (i+2<argc) {
+					rename=1;
+					GetSector(argv[++i],&side,&track,&sector);printf("rename s%d t%d sn%d\n",side,track,sector);
+					GetValue(argv[++i],&newid);printf("newid #%02X\n",newid);
+				} else {
+					printf(KERROR"-rename option needs a position and a sectorID in order to run properly!\n"KNORMAL);
 					exit(ABORT_ERROR);
 				}
 			} else if (strcmp(argv[i],"-dump")==0) {
@@ -722,6 +812,9 @@ void main(int argc, char **argv) {
 					printf(KERROR"-from option needs a side (0 or 1) to run properly!\n"KNORMAL);
 					exit(ABORT_ERROR);
 				}
+			} else if (strcmp(argv[i],"-clean")==0) {
+				cleanextra=1;
+				must_read=1;
 			} else if (strcmp(argv[i],"-merge")==0) {
 				must_read=1;
 				must_write=1;
@@ -857,6 +950,30 @@ void main(int argc, char **argv) {
 	/*********************************************************************
 	 * EDSK processing
 	*********************************************************************/
+	if (cleanextra) {
+		int sectorlen=0;
+		for (k=0;k<edsk->tracknumber;k++) {
+			for (j=0;j<edsk->sidenumber;j++) {
+				curtrack=k*edsk->sidenumber+j;
+				if (!edsk->track[curtrack].unformated) {
+					for (i=0;i<edsk->track[curtrack].sectornumber;i++) {
+						switch (edsk->track[curtrack].sector[i].size) {
+							case 0:sectorlen=128;break;
+							case 1:sectorlen=256;break;
+							case 2:sectorlen=512;break;
+							case 3:sectorlen=1024;break;
+							case 4:sectorlen=2048;break;
+							case 5:sectorlen=4096;break;
+							default:sectorlen=0;break;
+						}
+						if (edsk->track[curtrack].sector[i].length<3*sectorlen && edsk->track[curtrack].sector[i].length>sectorlen) {
+							edsk->track[curtrack].sector[i].length=sectorlen; // remove extra info
+						}
+					}
+				}
+			}
+		}
+	}
 	if (freegap) {
 		int sectorlen=0;
 		for (k=0;k<edsk->tracknumber;k++) {
@@ -895,6 +1012,15 @@ void main(int argc, char **argv) {
 	if (side>=edsk->sidenumber) {
 		printf(KERROR"This EDSK is not double-sided\n"KNORMAL);
 		exit(ABORT_ERROR);
+	}
+	if (rename) {
+		curtrack=track*edsk->sidenumber+side;
+		if (sector>=0 || sector<edsk->track[curtrack].sectornumber && newid>=0 && newid<256) {
+			edsk->track[curtrack].sector[sector].id=newid;
+		} else {
+			printf(KERROR"Cannot rename sector (invalid position) curtrack=%d sector=%d or invalid id!\n"KNORMAL,curtrack,sector);
+			exit(ABORT_ERROR);
+		}
 	}
 	if (dumpdata) {
 		curtrack=track*edsk->sidenumber+side;
