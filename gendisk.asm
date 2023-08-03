@@ -436,6 +436,7 @@ ld hl,result ; tableau des résultats
 .wait_ready in a,(c) : jp p,.wait_ready
 and 64 : jr z,.GetDone      ; est-ce un résultat?
 inc c : ini : inc b : dec c ; oui, on le stocke
+ld a,5 : dec a : jr nz,$ ; Hitachi drive needs a small delay when retrieving results (investigations in progress)
 dec d
 jr nz,.wait_ready
 .GetDone
