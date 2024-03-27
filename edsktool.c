@@ -190,7 +190,7 @@ void ExploreTrack(struct s_edsk_track *track) {
 	} else {
 		printf("S%dT%02d G%02XF%02XS%02d: ",track->side,track->track,track->gap3,track->filler,track->sectornumber);
 		for (s=0;s<track->sectornumber;s++) {
-			printf("%s#%02X (S%d/L%d/%02X/%02X)",s>0?" ":"",track->sector[s].id,track->sector[s].size,track->sector[s].length,track->sector[s].st1,track->sector[s].st2);
+			printf("%s#%02X/T%d/S%d (S%d/L%d/%02X/%02X)",s>0?" ":"",track->sector[s].id,track->sector[s].track,track->sector[s].side,track->sector[s].size,track->sector[s].length,track->sector[s].st1,track->sector[s].st2);
 		}
 		printf(" [%04X]\n",track->headersize);
 	}
@@ -377,6 +377,8 @@ struct s_edsk *EDSK_load(char *edskfilename)
                                 edsk->track[curtrack].filler=data[i+23];
                                 edsk->track[curtrack].datarate=0;
                                 edsk->track[curtrack].recordingmode=0;
+                                edsk->track[curtrack].track=curtrack; // easy display
+                                edsk->track[curtrack].side=face; // easy display
                                 reallength=0;
                                 for (s=0;s<edsk->track[curtrack].sectornumber;s++) {
                                         switch (data[i+24+8*s+3]) {
@@ -546,6 +548,8 @@ void Usage() {
 	printf("-add  <side:track:sector[+next]> <id> <size>        add sector at position\n");
 	printf("-trackgap    <side:track[+next]> <gap3>             set GAP for track\n");
 	printf("-trackfiller <side:track[+next]> <filler>           set filler byte for track format\n");
+	printf("-sectormax   <side:track[+next]>  <size>            set maximum bytes for all sectors\n");
+	printf("-sectorcut   <side:track:sector[+next]>  <size>     set maximum bytes for one sector\n");
 	printf("-hexasize    <size>                                 set real size for hexagone sector operations\n");
 	printf("-tracklen    <size>                                 set real size for track operations & controls\n");
 	printf("\n");
@@ -642,8 +646,8 @@ void main(int argc, char **argv) {
 	char *datain=NULL;
 	char *sep;
 	int infile_offset=0,infile_size,hexasize=0x1800,tracklen=6250,usegap=0,freegap=0,side1=0,side2=0,newid=-1;
-	int drop=0,add=0,droptrack=0,trackgap=0,trackfiller=0,repetition=0,export=0,fixgap=1,refix=0,fixfiller=1;
-	int side=0,track=0,sector=0,sectorid,sectorsize,curtrack,gap3,filler,putfile_order;
+	int drop=0,add=0,droptrack=0,trackgap=0,trackfiller=0,repetition=0,export=0,fixgap=1,refix=0,fixfiller=1,sectorcut=0,sectormax=0;
+	int side=0,track=0,sector=0,sectorid,sectorsize,curtrack,gap3,filler,putfile_order,sectornewsize;
 	FILE *f;
 
 	printf("edsktool build %s / roudoudou from Resistance\n\n",__DATE__);
@@ -743,6 +747,19 @@ void main(int argc, char **argv) {
 					}
 					GetValue(argv[++i],&gap3);
 				}
+			} else if (strcmp(argv[i],"-sectormax")==0) {
+				if (i+2<argc) {
+					must_write=1;
+					sectormax=1;
+					GetTrack(argv[++i],&side,&track);
+					if ((sep=strchr(argv[i],'+'))) {
+						repetition=atoi(sep);
+					}
+					GetValue(argv[++i],&sectornewsize);
+				} else {
+					printf(KERROR"-trackfiller option needs a track + maxsize to run properly!\n"KNORMAL);
+					exit(ABORT_ERROR);
+				}
 			} else if (strcmp(argv[i],"-trackfiller")==0) {
 				if (i+2<argc) {
 					must_write=1;
@@ -752,6 +769,9 @@ void main(int argc, char **argv) {
 						repetition=atoi(sep);
 					}
 					GetValue(argv[++i],&filler);
+				} else {
+					printf(KERROR"-trackfiller option needs a track + filler to run properly!\n"KNORMAL);
+					exit(ABORT_ERROR);
 				}
 			} else if (strcmp(argv[i],"-droptrack")==0) {
 				if (i+1<argc) {
@@ -761,6 +781,19 @@ void main(int argc, char **argv) {
 					if ((sep=strchr(argv[i],'+'))) {
 						repetition=atoi(sep);
 					}
+				}
+			} else if (strcmp(argv[i],"-sectorcut")==0) {
+				if (i+2<argc) {
+					must_write=1;
+					sectorcut=1;
+					GetSector(argv[++i],&side,&track,&sector);
+					if ((sep=strchr(argv[i],'+'))) {
+						repetition=atoi(sep);
+					}
+					GetValue(argv[++i],&sectornewsize);
+				} else {
+					printf(KERROR"-sectorcut option needs a track and a sector index +size to run properly!\n"KNORMAL);
+					exit(ABORT_ERROR);
 				}
 			} else if (strcmp(argv[i],"-drop")==0) {
 				if (i+1<argc) {
@@ -996,7 +1029,7 @@ void main(int argc, char **argv) {
 			}
 		}
 	}
-	if (putfile+trackfiller+trackgap+droptrack+drop+add+getdata+putdata+dumpdata>1) {
+	if (putfile+sectormax+sectorcut+trackfiller+trackgap+droptrack+drop+add+getdata+putdata+dumpdata>1) {
 		printf(KERROR"Do not use multiple track/sector command at a time\n"KNORMAL);
 		exit(ABORT_ERROR);
 	}
@@ -1264,6 +1297,47 @@ void main(int argc, char **argv) {
 			} else {
 				printf(KWARNING"Track %d:%d is already unformated\n"KNORMAL,side,track);
 			}
+			track++;
+			repetition--;
+		}
+	}
+	if (sectorcut) {
+		repetition++;
+		while (repetition) {
+			curtrack=track*edsk->sidenumber+side;
+			if (sector>=0 && sector<edsk->track[curtrack].sectornumber) {
+				if (edsk->track[curtrack].sector[sector].length>sectornewsize) {
+					edsk->track[curtrack].sector[sector].length=sectornewsize;
+				} else {
+					printf("no resize on track %d\n",track);
+				}
+			} else {
+				printf(KERROR"Cannot drop sector (invalid position)\n"KNORMAL);
+				exit(ABORT_ERROR);
+			}
+			track++;
+			repetition--;
+		}
+	}
+	if (sectormax) {
+		repetition++;
+		while (repetition) {
+			curtrack=track*edsk->sidenumber+side;
+			for (i=0;i<edsk->track[curtrack].sectornumber;i++) {
+				if (edsk->track[curtrack].sector[i].length>sectornewsize) {
+					edsk->track[curtrack].sector[i].length=sectornewsize;
+				}
+			}
+			edsk->track[curtrack].filler=filler;
+			track++;
+			repetition--;
+		}
+	}
+	if (trackfiller) {
+		repetition++;
+		while (repetition) {
+			curtrack=track*edsk->sidenumber+side;
+			edsk->track[curtrack].filler=filler;
 			track++;
 			repetition--;
 		}
