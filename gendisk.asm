@@ -8,6 +8,13 @@ org implante
 ; get param
 cp 1 : ret nz : ld a,(ix+0) : ld (drive),a : xor a : ld (motor_state),a
 
+
+;ld hl,str_rsx_sd   : call #BCD4 : ret nc ; Carry=TRUE C=Rom number HL=routine
+;ld (sdvector),hl : ld a,c : ld (sdbank),a
+;ld hl,str_rsx_disc : call #BCD4 : ret nc ; Carry=TRUE C=Rom number HL=routine
+;ld (discvector),hl : ld a,c : ld (discbank),a
+
+
 ld (ForceExit+1),sp
 ld a,10 : ld (maxfatal),a
 
@@ -25,15 +32,14 @@ call CheckET3
 
 ld hl,str_calibrate : call PrintSTR
 ld a,(drive)
-;call CalibrateDrive
-;call CheckET3
+call CalibrateDrive
+call CheckET3
 call GetSpeed
 
 ;*********************************
             MainLoop
 ;*********************************
 call LoadPack : jp nc,ExitOK
-call MotorON
 
 ld hl,#4000 : ld (track_definition+1),hl
 
@@ -362,7 +368,7 @@ ei
 ld hl,str_err_format1
 ld a,(nbresult) : cp 7 : jp nz,ExitError
 ld hl,str_err_format2
-ld a,(result+0) : and 128+64+16+8 : jp nz,ExitError ; no disk, calib faile, head unavailable
+ld a,(result+0) : and 128+64+16+8 : jp nz,ExitError ; no disk, calib faile, head unavailable => 16 == Electronic Error why???? => Equipment Check (not in track 0 after 77 pulses)
 ld hl,str_err_format3
 ld a,(result+0) : and 32 : jp nz,ExitError ; terminated
 ld hl,str_err_format4
@@ -409,6 +415,9 @@ bit 6,a : call nz,unblockFDC          ; si bit 6 alors le FDC veut renvoyer quel
 inc c                                 ; sinon tout est ok pour envoyer au FDC
 pop af
 out (c),a
+
+ld b,9:djnz $ ; legacy Amsdos delay
+
 pop bc,hl
 ret
 
@@ -418,6 +427,9 @@ ld bc,#FB7E   ; statut port
 .waitready in 0,(c) : jp p,.waitready ; tant que le FDC est occupé, on attend
 inc c         ; I/O port
 out (c),a
+
+ld b,9:djnz $ ; legacy Amsdos delay
+
 pop bc
 ret
 
@@ -467,7 +479,7 @@ call GetResult
 ld a,(nbresult) : cp 2 : jr nz,calires ; 2 résultats ou rien
 ld a,(result) : and #F8                ; on garde uniquement les bits d'état de ET0
                                        ; sinon ça ne fonctionnera 
-cp 32 : jr nz,caliretry                ; si problème on recommence
+and 32 : jr z,caliretry                ; si problème on recommence
 pop de
 push af,bc,de,hl
 ld hl,str_calib_ok : call printSTR
@@ -485,7 +497,7 @@ ld a,8 :call sendFDCcommand
 call GetResult
 ld a,(nbresult) : cp 2 : jr nz,WaitSeek ; 2 résultats ou rien, comme la calibration
 ld a,(result) : and #F8                 ; on ne conserve que les bits d'état de ET0
-cp 32 : jr nz,WaitSeek                  ; est-ce que l'instruction est terminée?
+and 32 : jr z,WaitSeek                  ; est-ce que l'instruction est terminée?
 ld a,(result+1) : cp e : ret z          ; on est sur la piste on s'en va
 ld a,d : call CalibrateDrive            ; sinon on recalibre
 jr SeekTrack                            ; et on recommence
@@ -546,6 +558,7 @@ maxfatal defb 0
 
 ;*********************************
             GetSpeed
+ret
 ;*********************************
 push hl
 di
@@ -592,13 +605,19 @@ ret
 
 str_rsx_sd   str 'SD'
 str_rsx_disc str 'DISC'
+
+sdvector defw #1234
+sdbank   defb #12
+discvector defw #1234
+discbank   defb #12
+
 ;*********************************
             LoadPack
 ;*********************************
+;xor a
+;rst #18
+;defw sdvector
 
-ld hl,str_rsx_sd : call #BCD4 : jr nc,.start
-xor a : call #001B
-.start
 ld hl,str_loadpack : call PrintStr
 ld hl,pack_filename
 ld b,pack_end-pack_filename
@@ -609,9 +628,12 @@ ld hl,#4000
 call DISK_IN_DIRECT
 call DISK_IN_CLOSE
 
-ld hl,str_rsx_disc : call #BCD4 : jr nc,.close
-xor a : call #001B
-.close
+call MotorON
+
+;xor a
+;rst #18
+;defw discvector
+
 ;*** increment counter in filename ***
 ld hl,pack_number+3
 .reloop ld a,(hl) : inc a : cp '9'+1 : jr nz,.incok
