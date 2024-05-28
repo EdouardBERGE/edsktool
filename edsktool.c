@@ -110,7 +110,7 @@ struct s_edsk *NewEDSK(char *format) {
 
 void MAPTrack(struct s_edsk_track *track) {
 	int rlen,gaplen,i,curlen;
-	int s,weak,gap;
+	int s,weak,gap,tracklen=0;
 
 	if (track->unformated) {
 		printf("S%dT%02d : Unformated\n",track->side,track->track);
@@ -122,6 +122,9 @@ void MAPTrack(struct s_edsk_track *track) {
 		if (track->gap3<160) gaplen=2; else gaplen=3;
 
 		printf("||"); // track info
+			      //
+		tracklen=146+track->sectornumber*(track->gap3+62);
+			      //
 		for (s=0;s<track->sectornumber;s++) {
 			switch (gaplen) {
 				case 3:printf("|");
@@ -144,6 +147,7 @@ void MAPTrack(struct s_edsk_track *track) {
 			if (curlen>track->sector[s].length) {
 				curlen=track->sector[s].length;
 			}
+			tracklen+=curlen;
 
 			rlen=(curlen+31)/64;
 			rlen-=2;
@@ -168,6 +172,8 @@ void MAPTrack(struct s_edsk_track *track) {
 		if (weak && gap) printf(" gap+weak"); else
 		if (weak) printf(" weak"); else
 		if (gap) printf(" gap");
+		if (tracklen>6250 && tracklen<6500) printf("bigTrack! (%d bytes)",tracklen);
+		if (tracklen>=6500) printf("Impossible Track! (%d bytes)",tracklen);
 		printf("\n");
 		weak=gap=0;
 	}
@@ -1618,7 +1624,7 @@ void main(int argc, char **argv) {
 					realidx=0;
 					for (i=0;i<edsk->track[curtrack].sectornumber;i++) {
 						if (i) fprintf(exp,",");
-						fprintf(exp,"#%02X,%d",edsk->track[curtrack].sector[i].id,edsk->track[curtrack].sector[i].size);
+						fprintf(exp,"%d,%d,#%02X,%d",edsk->track[curtrack].sector[i].track,edsk->track[curtrack].sector[i].side,edsk->track[curtrack].sector[i].id,edsk->track[curtrack].sector[i].size);
 						verifsector++;
 
 						posdelay[i]=realidx*(62+sectorlen+edsk->track[curtrack].gap3);
@@ -1630,11 +1636,11 @@ void main(int argc, char **argv) {
 						if (i+1<edsk->track[curtrack].sectornumber && !edsk->track[curtrack].sector[i+1].fakegap) {
 							switch (edsk->track[curtrack].sector[i].size-minimalsize) {
 								default:break;
-								case 1:	fprintf(exp,",/* erased */ %d,0",garbageID);verifsector++;realidx++;break;
-								case 2:	fprintf(exp,",/* next 3 erased */ %d,0,%d,0,%d,0",garbageID,garbageID,garbageID);verifsector+=3;realidx+=3;break;
-								case 3:	fprintf(exp,",/* next 7 erased */ %d,0,%d,0,%d,0,%d,0,%d,0,%d,0,%d,0",garbageID,garbageID,garbageID,garbageID,garbageID,garbageID,garbageID);verifsector+=7;realidx+=7;break;
-								case 4:	fprintf(exp,",/* next 15 erased */ %d,0,%d,0,%d,0,%d,0,%d,0,%d,0,%d,0",garbageID,garbageID,garbageID,garbageID,garbageID,garbageID,garbageID);
-									fprintf(exp,",%d,0,%d,0,%d,0,%d,0,%d,0,%d,0,%d,0,%d,0",garbageID,garbageID,garbageID,garbageID,garbageID,garbageID,garbageID,garbageID);verifsector+=15;realidx+=15;break;
+								case 1:	fprintf(exp,",/* erased */ 0,0,%d,0",garbageID);verifsector++;realidx++;break;
+								case 2:	fprintf(exp,",/* next 3 erased */ 0,0,%d,0,0,0,%d,0,0,0,%d,0",garbageID,garbageID,garbageID);verifsector+=3;realidx+=3;break;
+								case 3:	fprintf(exp,",/* next 7 erased */ 0,0,%d,0,0,0,%d,0,0,0,%d,0,0,0,%d,0,0,0,%d,0,0,0,%d,0,0,0,%d,0",garbageID,garbageID,garbageID,garbageID,garbageID,garbageID,garbageID);verifsector+=7;realidx+=7;break;
+								case 4:	fprintf(exp,",/* next 15 erased */ 0,0,%d,0,0,0,%d,0,0,0,%d,0,0,0,%d,0,0,0,%d,0,0,0,%d,0,0,0,%d,0",garbageID,garbageID,garbageID,garbageID,garbageID,garbageID,garbageID);
+									fprintf(exp,",0,0,%d,0,0,0,%d,0,0,0,%d,0,0,0,%d,0,0,0,%d,0,0,0,%d,0,0,0,%d,0,0,0,%d,0",garbageID,garbageID,garbageID,garbageID,garbageID,garbageID,garbageID,garbageID);verifsector+=15;realidx+=15;break;
 							}
 						} else {
 							switch (edsk->track[curtrack].sector[i].size-minimalsize) {
@@ -1679,7 +1685,7 @@ void main(int argc, char **argv) {
 							if (edsk->track[curtrack].sector[i].data[j]!=edsk->track[curtrack].filler) break;
 						}
 						if (j!=zel) {
-							fprintf(exp,"defb %d,%d,#%02X,%d,#%02X\n",track,side,edsk->track[curtrack].sector[i].id,edsk->track[curtrack].sector[i].size,
+							fprintf(exp,"defb %d,%d,#%02X,%d,#%02X\n",edsk->track[curtrack].sector[i].track,edsk->track[curtrack].sector[i].side,edsk->track[curtrack].sector[i].id,edsk->track[curtrack].sector[i].size,
 									edsk->track[curtrack].sector[i].st2&0x40?0x49:0x45); // DAM
 							fprintf(exp,"defw %d ; pos delay\n",posdelay[i]);
 							fprintf(exp,"defw %d ; real size\n",zel);
@@ -1720,7 +1726,7 @@ void main(int argc, char **argv) {
 							if (edsk->track[curtrack].sector[i].data[j]!=edsk->track[curtrack].filler) break;
 						}
 						if (j!=zel || (i+1<edsk->track[curtrack].sectornumber && edsk->track[curtrack].sector[i+1].fakegap)) {
-							fprintf(exp,"defb %d,%d,#%02X,%d,#%02X\n",track,side,edsk->track[curtrack].sector[i].id,edsk->track[curtrack].sector[i].size,
+							fprintf(exp,"defb %d,%d,#%02X,%d,#%02X\n",edsk->track[curtrack].sector[i].track,edsk->track[curtrack].sector[i].side,edsk->track[curtrack].sector[i].id,edsk->track[curtrack].sector[i].size,
 									edsk->track[curtrack].sector[i].st2&0x40?0x49:0x45); // DAM
 							fprintf(exp,"defw %d ; pos delay\n",posdelay[i]);
 							fprintf(exp,"defw %d ; real size\n",zel);

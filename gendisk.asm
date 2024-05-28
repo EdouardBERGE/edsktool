@@ -90,6 +90,8 @@ ld (sectordatasize),de
 	ld a,(writecommand) : cp #49 : ld hl,str_dam : call z,PrintSTR
 	ld a,':' : call #BB5A
 
+	ld a,(track) : call dispHexa : ld a,':' : call #BB5A
+	ld a,(side) : call dispHexa : ld a,':' : call #BB5A
 	ld a,(idsector) : call dispHexa : ld a,':' : call #BB5A
 	ld a,(sectorsize) : call dispA : ld a,':' : call #BB5A
 	pop hl : call dispHL
@@ -355,8 +357,8 @@ ld a,(nbsector) : ld d,a
 ld a,(filler)     : call sendFDCfast
 
 .loopsector
-ld a,(track) : call sendFDCfast          ; track
-ld a,(side)  : call sendFDCfast          ; head
+ld a,(hl)    : call sendFDCfast : inc hl ; track
+ld a,(hl)    : call sendFDCfast : inc hl ; head
 ld a,(hl)    : call sendFDCfast : inc hl ; ID
 ld a,(hl)    : call sendFDCfast : inc hl ; sector size (used to read/write)
 dec d
